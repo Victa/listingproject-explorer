@@ -1,0 +1,58 @@
+---
+description: Listings Project NYC Streamlit app — architecture, data model, conventions
+alwaysApply: true
+---
+
+# Listings Project
+
+Personal Streamlit app for searching NYC listings on listingsproject.com. **App-only** — no CLI/bash scripts.
+
+## Files
+
+- `app.py` — Streamlit UI: filters, card grid, CSV export
+- `listing_scraper.py` — fetches and parses the live NYC index HTML
+
+Run: `streamlit run app.py`
+
+## Architecture
+
+1. `fetch_all_listings()` crawls all index pages once
+2. `@st.cache_data` in `app.py` caches the full crawl; **Refresh listings** clears cache
+3. Borough, neighborhood, and date filters run **in memory** on cached rows — no re-crawl on filter change
+
+## Data model (`ListingRow`)
+
+Parsed from each index card on `https://www.listingsproject.com/real-estate/new-york-city`:
+
+| Field | Source |
+|-------|--------|
+| `neighborhood_name` | Text before borough in location line (raw, no normalization) |
+| `borough_label` / `borough_key` | Derived from location line |
+| `listing_type` | Segment after first `\|` (e.g. "Apartments for Sublet") |
+| `description` | `<p class="text-sm leading-normal mb-4">` on card |
+| `listing_start` / `listing_end` | Availability dates on card |
+| `photo_url`, `title`, `price`, `url` | Standard card fields |
+
+Location line format: `Neighborhood, Borough | Type | optional tags`
+
+## Borough rules
+
+- Brooklyn/Queens/Bronx/Staten Island: match borough name in location line
+- **Manhattan**: `, New York` with no other borough token (best-effort heuristic)
+- Neighborhood dropdown cascades from borough; keep raw strings — do not normalize or dedupe aggressively ("Bed Stuy" and "Bedford Stuy" are both valid)
+
+## Date filters (app.py)
+
+- **Any dates** (default): no date filter
+- **Dates** (check-in / check-out): listing must cover the full window — `listing_start <= check_in` and `listing_end >= check_out`; tolerance expands the required window via `_expand_date_range`
+- **Flexible**: stay length gates the match against any selected month. **Month** → listing must cover the entire month (`listing_start <= month_start` and `listing_end >= month_end`); **Week** → listing must offer a continuous `WEEK_STAY_DAYS` window inside the month. See `_listing_covers_month_stay` / `_listing_covers_week_stay`.
+
+## Parser maintenance
+
+HTML selectors in `listing_scraper.py` drift when the site changes. Key regexes: `CARD_SPLIT_RE`, `HOOD_RE`, `TITLE_LINK_RE`. Card wrapper is `flex flex-col md:flex-row`; location line uses `text-grey-dark  text-smish`.
+
+## Scope
+
+- Extend filters and results UX in `app.py`; keep parsing logic in `listing_scraper.py`
+- Do not add detail-page fetching unless explicitly requested — index cards have enough data
+- Minimize scope; match existing code style

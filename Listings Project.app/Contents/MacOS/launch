@@ -1,0 +1,59 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_DIR="$(dirname "$APP_DIR")"
+VENV="$PROJECT_DIR/.venv/bin/activate"
+PORT=8501
+URL="http://localhost:$PORT"
+LOG="$PROJECT_DIR/.build/app-launch.log"
+OPEN="/usr/bin/open"
+CURL="/usr/bin/curl"
+
+alert() {
+	osascript -e "display alert \"Listings Project\" message \"$1\" as critical" 2>/dev/null || true
+}
+
+mkdir -p "$(dirname "$LOG")"
+
+if [[ ! -f "$VENV" ]]; then
+	alert "Virtual environment not found.\\n\\nFrom Terminal, in the project folder:\\npython -m venv .venv\\nsource .venv/bin/activate\\npip install -r requirements.txt"
+	exit 1
+fi
+
+# Already running — just open the browser.
+if "$CURL" -sf "$URL/_stcore/health" >/dev/null 2>&1; then
+	"$OPEN" "$URL"
+	exit 0
+fi
+
+cd "$PROJECT_DIR"
+# shellcheck disable=SC1090
+source "$VENV"
+
+streamlit run app.py \
+	--server.port "$PORT" \
+	--server.headless true \
+	>>"$LOG" 2>&1 &
+STPID=$!
+
+cleanup() {
+	kill "$STPID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+for _ in $(seq 1 60); do
+	if "$CURL" -sf "$URL/_stcore/health" >/dev/null 2>&1; then
+		"$OPEN" "$URL"
+		wait "$STPID"
+		exit 0
+	fi
+	if ! kill -0 "$STPID" 2>/dev/null; then
+		alert "Streamlit failed to start.\\n\\nSee .build/app-launch.log for details."
+		exit 1
+	fi
+	sleep 0.5
+done
+
+alert "Timed out waiting for the app to start.\\n\\nSee .build/app-launch.log for details."
+exit 1

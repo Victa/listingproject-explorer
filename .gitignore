@@ -1,0 +1,8 @@
+.venv/
+.listings_filters.json
+.listings_auth.json
+.listings_seen.json
+.build/
+__pycache__/
+*.pyc
+.DS_Store
