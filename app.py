@@ -146,6 +146,36 @@ def _expand_date_range(
     return range_start - delta, range_end + delta
 
 
+def _plural(n: int, unit: str) -> str:
+    return f"{n} {unit}" if n == 1 else f"{n} {unit}s"
+
+
+def _format_stay_length(start: datetime, end: datetime) -> str:
+    """Human-readable inclusive stay length (e.g. '1 year', '3 months', '2 weeks')."""
+    start_d = start.date()
+    # Inclusive end: Sep 1 -> Aug 31 next year is exactly 1 year.
+    effective_end = end.date() + timedelta(days=1)
+    total_days = (effective_end - start_d).days
+    if total_days <= 0:
+        return ""
+
+    months = (effective_end.year - start_d.year) * 12 + (effective_end.month - start_d.month)
+    if effective_end.day < start_d.day:
+        months -= 1
+
+    if months >= 12:
+        years, rem_months = divmod(months, 12)
+        if rem_months:
+            return f"{_plural(years, 'year')}, {_plural(rem_months, 'month')}"
+        return _plural(years, "year")
+    if months >= 1:
+        return _plural(months, "month")
+    if total_days >= 7:
+        weeks = total_days // 7
+        return _plural(weeks, "week")
+    return _plural(total_days, "day")
+
+
 def _listing_covers_interval(
     listing_start: datetime, listing_end: datetime, interval_start: date, interval_end: date
 ) -> bool:
@@ -567,7 +597,8 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
             st.markdown(f"**{row.title}**")
             st.caption(f"{location} · {row.listing_type or 'Listing'}")
             st.markdown(f"**{row.price}**")
-            st.caption(row.availability)
+            length = _format_stay_length(row.listing_start, row.listing_end)
+            st.caption(f"{row.availability} ({length})" if length else row.availability)
 
             if row.description:
                 st.markdown(row.description)
