@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import html as html_lib
 import re
 import time
@@ -59,6 +60,355 @@ BOROUGH_LABELS: dict[BoroughKey, str] = {
     "staten_island": "Staten Island",
 }
 
+# Canonical neighborhood name -> known alias spellings (per borough).
+# Aliases are matched after _normalize_hood (lowercase, no punctuation).
+NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
+    "brooklyn": {
+        "Bedford-Stuyvesant": (
+            "bedford stuyvesant",
+            "bedford-stuyvesant",
+            "bed stuy",
+            "bed-stuy",
+            "bedstuy",
+            "stuyvesant heights",
+        ),
+        "Prospect Lefferts Gardens": (
+            "prospect lefferts gardens",
+            "prospect lefferts",
+            "plg",
+        ),
+        "Prospect Heights": ("prospect heights",),
+        "Clinton Hill": ("clinton hill",),
+        "Fort Greene": ("fort greene",),
+        "Ocean Hill": ("ocean hill",),
+        "Park Slope": ("park slope",),
+        "South Slope": ("south slope",),
+        "Greenwood": ("greenwood", "greenwood heights"),
+        "Sunset Park": ("sunset park",),
+        "Bay Ridge": ("bay ridge",),
+        "Borough Park": ("borough park", "boro park"),
+        "Dyker Heights": ("dyker heights",),
+        "Bensonhurst": ("bensonhurst",),
+        "Gravesend": ("gravesend",),
+        "Coney Island": ("coney island",),
+        "Brighton Beach": ("brighton beach",),
+        "Sheepshead Bay": ("sheepshead bay",),
+        "Flatbush": ("flatbush",),
+        "East Flatbush": ("east flatbush",),
+        "Crown Heights": ("crown heights",),
+        "Weeksville": ("weeksville",),
+        "Bushwick": ("bushwick",),
+        "East Williamsburg": ("east williamsburg",),
+        "Williamsburg": ("williamsburg", "wburg", "wburg."),
+        "Greenpoint": ("greenpoint",),
+        "Dumbo": ("dumbo", "d.u.m.b.o.", "down under the manhattan bridge overpass"),
+        "Brooklyn Heights": ("brooklyn heights",),
+        "Cobble Hill": ("cobble hill",),
+        "Carroll Gardens": ("carroll gardens",),
+        "Boerum Hill": ("boerum hill",),
+        "Gowanus": ("gowanus",),
+        "Red Hook": ("red hook",),
+        "Downtown Brooklyn": ("downtown brooklyn", "downtown bk"),
+        "Navy Yard": ("navy yard", "brooklyn navy yard"),
+        "Vinegar Hill": ("vinegar hill",),
+        "Prospect Park South": ("prospect park south",),
+        "Windsor Terrace": ("windsor terrace",),
+        "Kensington": ("kensington",),
+        "Ditmas Park": ("ditmas park",),
+        "Midwood": ("midwood",),
+        "Marine Park": ("marine park",),
+        "Canarsie": ("canarsie",),
+        "East New York": ("east new york", "eny"),
+        "Brownsville": ("brownsville",),
+        "Cypress Hills": ("cypress hills",),
+        "Bergen Beach": ("bergen beach",),
+        "Mill Basin": ("mill basin",),
+        "Gerritsen Beach": ("gerritsen beach",),
+        "Columbia Street Waterfront": (
+            "columbia street waterfront",
+            "columbia waterfront",
+        ),
+    },
+    "manhattan": {
+        "Upper West Side": ("upper west side", "uws"),
+        "Upper East Side": ("upper east side", "ues"),
+        "Midtown": ("midtown", "midtown manhattan"),
+        "Midtown East": ("midtown east",),
+        "Midtown West": ("midtown west",),
+        "Hell's Kitchen": ("hells kitchen", "hell's kitchen", "clinton"),
+        "Chelsea": ("chelsea",),
+        "Flatiron": ("flatiron", "flatiron district"),
+        "Gramercy": ("gramercy", "gramercy park"),
+        "Murray Hill": ("murray hill",),
+        "Kips Bay": ("kips bay",),
+        "NoMad": ("nomad", "no mad"),
+        "Union Square": ("union square",),
+        "Greenwich Village": ("greenwich village", "the village"),
+        "West Village": ("west village",),
+        "East Village": ("east village",),
+        "Lower East Side": ("lower east side", "les"),
+        "SoHo": ("soho", "so ho"),
+        "NoHo": ("noho", "no ho"),
+        "NoLita": ("nolita", "no lita"),
+        "Little Italy": ("little italy",),
+        "Chinatown": ("chinatown",),
+        "Tribeca": ("tribeca", "tri beca"),
+        "Financial District": ("financial district", "fidi", "fi di"),
+        "Battery Park City": ("battery park city", "bpc"),
+        "Civic Center": ("civic center",),
+        "Two Bridges": ("two bridges",),
+        "Harlem": ("harlem",),
+        "East Harlem": ("east harlem", "spanish harlem", "el barrio"),
+        "Central Harlem": ("central harlem",),
+        "West Harlem": ("west harlem",),
+        "Hamilton Heights": ("hamilton heights",),
+        "Washington Heights": ("washington heights", "wash heights"),
+        "Inwood": ("inwood",),
+        "Morningside Heights": ("morningside heights",),
+        "Manhattan Valley": ("manhattan valley",),
+        "Lincoln Square": ("lincoln square",),
+        "Theater District": ("theater district", "theatre district"),
+        "Times Square": ("times square",),
+        "Hudson Yards": ("hudson yards",),
+        "Meatpacking District": ("meatpacking district", "meatpacking", "meat packing"),
+        "Stuyvesant Town": ("stuyvesant town", "stuy town"),
+        "Peter Cooper Village": ("peter cooper village",),
+        "Roosevelt Island": ("roosevelt island",),
+        "Yorkville": ("yorkville",),
+        "Lenox Hill": ("lenox hill",),
+        "Carnegie Hill": ("carnegie hill",),
+        "Turtle Bay": ("turtle bay",),
+        "Sutton Place": ("sutton place",),
+        "Beekman": ("beekman", "beekman place"),
+    },
+    "queens": {
+        "Astoria": ("astoria",),
+        "Long Island City": ("long island city", "lic"),
+        "Sunnyside": ("sunnyside",),
+        "Woodside": ("woodside",),
+        "Jackson Heights": ("jackson heights",),
+        "Elmhurst": ("elmhurst",),
+        "Corona": ("corona",),
+        "Flushing": ("flushing",),
+        "Forest Hills": ("forest hills",),
+        "Rego Park": ("rego park",),
+        "Kew Gardens": ("kew gardens",),
+        "Kew Gardens Hills": ("kew gardens hills",),
+        "Briarwood": ("briarwood",),
+        "Jamaica": ("jamaica",),
+        "Jamaica Estates": ("jamaica estates",),
+        "Hollis": ("hollis",),
+        "Queens Village": ("queens village",),
+        "Bayside": ("bayside",),
+        "Whitestone": ("whitestone",),
+        "College Point": ("college point",),
+        "Fresh Meadows": ("fresh meadows",),
+        "Oakland Gardens": ("oakland gardens",),
+        "Douglaston": ("douglaston",),
+        "Little Neck": ("little neck",),
+        "Ridgewood": ("ridgewood",),
+        "Glendale": ("glendale",),
+        "Middle Village": ("middle village",),
+        "Maspeth": ("maspeth",),
+        "Woodhaven": ("woodhaven",),
+        "Ozone Park": ("ozone park",),
+        "Howard Beach": ("howard beach",),
+        "South Ozone Park": ("south ozone park",),
+        "Richmond Hill": ("richmond hill",),
+        "South Richmond Hill": ("south richmond hill",),
+        "Rockaway Beach": ("rockaway beach", "the rockaways", "rockaways"),
+        "Far Rockaway": ("far rockaway",),
+        "Breezy Point": ("breezy point",),
+        "Ditmars": ("ditmars", "ditmars steinway"),
+        "Steinway": ("steinway",),
+        "Hunters Point": ("hunters point", "hunter's point"),
+        "Dutch Kills": ("dutch kills",),
+        "Ravenswood": ("ravenswood",),
+    },
+    "bronx": {
+        "Riverdale": ("riverdale",),
+        "Kingsbridge": ("kingsbridge",),
+        "Marble Hill": ("marble hill",),
+        "Fordham": ("fordham",),
+        "Belmont": ("belmont",),
+        "University Heights": ("university heights",),
+        "Morris Heights": ("morris heights",),
+        "Highbridge": ("highbridge", "high bridge"),
+        "Concourse": ("concourse", "the concourse"),
+        "Mott Haven": ("mott haven",),
+        "Port Morris": ("port morris",),
+        "Melrose": ("melrose",),
+        "Morrisania": ("morrisania",),
+        "Tremont": ("tremont",),
+        "West Farms": ("west farms",),
+        "Crotona Park": ("crotona park", "crotona"),
+        "Bronx Park": ("bronx park",),
+        "Norwood": ("norwood",),
+        "Bedford Park": ("bedford park",),
+        "Williamsbridge": ("williamsbridge",),
+        "Wakefield": ("wakefield",),
+        "Edenwald": ("edenwald",),
+        "Eastchester": ("eastchester",),
+        "Baychester": ("baychester",),
+        "Co-op City": ("co-op city", "coop city"),
+        "Pelham Bay": ("pelham bay",),
+        "Pelham Parkway": ("pelham parkway",),
+        "Morris Park": ("morris park",),
+        "Van Nest": ("van nest",),
+        "Westchester Square": ("westchester square",),
+        "Castle Hill": ("castle hill",),
+        "Parkchester": ("parkchester",),
+        "Soundview": ("soundview",),
+        "Hunts Point": ("hunts point", "hunt's point"),
+        "Longwood": ("longwood",),
+        "Claremont": ("claremont",),
+        "Throgs Neck": ("throgs neck", "throggs neck"),
+        "City Island": ("city island",),
+        "Country Club": ("country club",),
+        "Spuyten Duyvil": ("spuyten duyvil",),
+        "Fieldston": ("fieldston",),
+    },
+    "staten_island": {
+        "St. George": ("st george", "st. george", "saint george"),
+        "Tompkinsville": ("tompkinsville",),
+        "Stapleton": ("stapleton",),
+        "Clifton": ("clifton",),
+        "Concord": ("concord",),
+        "Grymes Hill": ("grymes hill",),
+        "Silver Lake": ("silver lake",),
+        "West Brighton": ("west brighton", "westbrighton"),
+        "New Brighton": ("new brighton",),
+        "Snug Harbor": ("snug harbor",),
+        "Port Richmond": ("port richmond",),
+        "Mariners Harbor": ("mariners harbor", "mariner's harbor"),
+        "Graniteville": ("graniteville",),
+        "Westerleigh": ("westerleigh",),
+        "Castleton Corners": ("castleton corners",),
+        "Todt Hill": ("todt hill",),
+        "Dongan Hills": ("dongan hills",),
+        "New Dorp": ("new dorp",),
+        "Oakwood": ("oakwood",),
+        "Great Kills": ("great kills",),
+        "Eltingville": ("eltingville",),
+        "Annadale": ("annadale",),
+        "Huguenot": ("huguenot",),
+        "Prince's Bay": ("princes bay", "prince's bay"),
+        "Tottenville": ("tottenville",),
+        "Charleston": ("charleston",),
+        "Rossville": ("rossville",),
+        "Arden Heights": ("arden heights",),
+        "Willowbrook": ("willowbrook",),
+        "Bulls Head": ("bulls head", "bull's head"),
+        "Travis": ("travis",),
+        "Midland Beach": ("midland beach",),
+        "South Beach": ("south beach",),
+        "Fort Wadsworth": ("fort wadsworth",),
+    },
+}
+
+_BOROUGH_STRIP_RE = re.compile(
+    r""",?\s*(?:Brooklyn|Queens|Bronx|Staten Island|Manhattan|New York)\s*$""",
+    re.IGNORECASE,
+)
+_HOOD_SPLIT_RE = re.compile(r"\s*[,/&]|\s+and\s+", re.IGNORECASE)
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
+_BOROUGH_TOKEN_NORMS = frozenset(
+    {
+        "brooklyn",
+        "queens",
+        "bronx",
+        "staten island",
+        "manhattan",
+        "new york",
+        "nyc",
+    }
+)
+_FUZZY_CUTOFF = 0.82
+
+
+def _normalize_hood(s: str) -> str:
+    """Lowercase, unescape, drop punctuation/hyphens, collapse whitespace."""
+    t = html_lib.unescape(s).lower().strip()
+    t = _NON_ALNUM_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _build_alias_lookups() -> tuple[
+    dict[BoroughKey, dict[str, str]],
+    dict[BoroughKey, list[str]],
+]:
+    """Build normalized alias -> canonical lookup and canonical name lists per borough."""
+    alias_lookup: dict[BoroughKey, dict[str, str]] = {}
+    canonical_by_borough: dict[BoroughKey, list[str]] = {}
+    for borough_key, aliases in NEIGHBORHOOD_ALIASES.items():
+        lookup: dict[str, str] = {}
+        canonicals: list[str] = []
+        for canonical, alias_list in aliases.items():
+            canonicals.append(canonical)
+            lookup[_normalize_hood(canonical)] = canonical
+            for alias in alias_list:
+                lookup[_normalize_hood(alias)] = canonical
+        alias_lookup[borough_key] = lookup
+        canonical_by_borough[borough_key] = canonicals
+    return alias_lookup, canonical_by_borough
+
+
+_ALIAS_LOOKUP, _CANONICAL_BY_BOROUGH = _build_alias_lookups()
+
+
+def _canonicalize_neighborhoods(
+    first_segment: str, borough_key: BoroughKey
+) -> tuple[str, ...]:
+    """
+    Map a free-text location segment to one or more canonical neighborhood names.
+
+    Splits on commas/slashes/ampersands, matches each token via alias map then
+    fuzzy fallback; unmatched tokens are kept title-cased.
+    """
+    stripped = _BOROUGH_STRIP_RE.sub("", first_segment).strip()
+    if not stripped:
+        return ()
+
+    tokens = [t.strip() for t in _HOOD_SPLIT_RE.split(stripped) if t.strip()]
+    if not tokens:
+        cleaned = re.sub(r"\s+", " ", stripped).strip()
+        return (cleaned,) if cleaned else ()
+
+    lookup = _ALIAS_LOOKUP.get(borough_key, {})
+    canonicals = _CANONICAL_BY_BOROUGH.get(borough_key, [])
+    # Normalized canonical -> display name for fuzzy result mapping
+    norm_to_canonical = {_normalize_hood(c): c for c in canonicals}
+    fuzzy_choices = list(norm_to_canonical.keys())
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for token in tokens:
+        # Drop street-intersection suffixes like "Franklyn Av x Lafayette Av"
+        token = re.sub(r"\s*[-–]\s*.*\bx\b.*$", "", token, flags=re.I).strip()
+        if not token:
+            continue
+        norm = _normalize_hood(token)
+        if not norm or norm in _BOROUGH_TOKEN_NORMS:
+            continue
+
+        matched: str | None = lookup.get(norm)
+        if matched is None and fuzzy_choices:
+            close = difflib.get_close_matches(
+                norm, fuzzy_choices, n=1, cutoff=_FUZZY_CUTOFF
+            )
+            if close:
+                matched = norm_to_canonical[close[0]]
+
+        if matched is None:
+            # Title-case the cleaned token for display
+            matched = " ".join(w.capitalize() for w in norm.split())
+
+        if matched not in seen:
+            seen.add(matched)
+            result.append(matched)
+
+    return tuple(result)
+
 
 def _extract_listing_thumb_url(chunk: str) -> str | None:
     """First index-card photo URL in a listing HTML chunk, if any."""
@@ -78,6 +428,8 @@ class ListingRow:
     # Area + borough from the card line, e.g. "Greenpoint, Brooklyn"
     neighborhood: str
     neighborhood_name: str
+    # Canonical neighborhood name(s) derived from neighborhood_name
+    neighborhood_names: tuple[str, ...]
     borough_label: str
     borough_key: BoroughKey
     listing_type: str
@@ -142,12 +494,15 @@ def _derive_borough_key(location_line: str) -> BoroughKey:
     return "all"
 
 
-def _parse_location_line(raw_line: str) -> tuple[str, str, str, BoroughKey]:
+def _parse_location_line(
+    raw_line: str,
+) -> tuple[str, tuple[str, ...], str, str, BoroughKey]:
     """
-    Parse a card location line into neighborhood_name, borough_label, listing_type, borough_key.
+    Parse a card location line into neighborhood_name, neighborhood_names,
+    borough_label, listing_type, borough_key.
 
     Example: ``Park Slope, Brooklyn | Apartments for Sublet`` ->
-    (``Park Slope``, ``Brooklyn``, ``Apartments for Sublet``, ``brooklyn``).
+    (``Park Slope``, (``Park Slope``,), ``Brooklyn``, ``Apartments for Sublet``, ``brooklyn``).
     """
     normalized = _normalize_title(raw_line)
     parts = [p.strip() for p in normalized.split("|")]
@@ -165,7 +520,11 @@ def _parse_location_line(raw_line: str) -> tuple[str, str, str, BoroughKey]:
     else:
         neighborhood_name = first_segment.strip()
 
-    return neighborhood_name, borough_label, listing_type, borough_key
+    neighborhood_names = _canonicalize_neighborhoods(first_segment, borough_key)
+    if not neighborhood_names and neighborhood_name:
+        neighborhood_names = (neighborhood_name,)
+
+    return neighborhood_name, neighborhood_names, borough_label, listing_type, borough_key
 
 
 def _absolute_url(href: str) -> str:
@@ -200,6 +559,7 @@ def _row_from_parsed(row: dict, *, is_first_access: bool = False) -> ListingRow:
         title=row["title"],
         neighborhood=row["hood_line"],
         neighborhood_name=row["neighborhood_name"],
+        neighborhood_names=tuple(row["neighborhood_names"]),
         borough_label=row["borough_label"],
         borough_key=row["borough_key"],
         listing_type=row["listing_type"],
@@ -245,9 +605,13 @@ def parse_listings_from_html(html: str, borough: BoroughKey = "all") -> list[dic
             continue
         title = _normalize_title(title_raw)
         url = _absolute_url(href)
-        neighborhood_name, borough_label, listing_type, borough_key = _parse_location_line(
-            raw_location_line
-        )
+        (
+            neighborhood_name,
+            neighborhood_names,
+            borough_label,
+            listing_type,
+            borough_key,
+        ) = _parse_location_line(raw_location_line)
         out.append(
             {
                 "listing_start": start_dt,
@@ -259,6 +623,7 @@ def parse_listings_from_html(html: str, borough: BoroughKey = "all") -> list[dic
                 "url": url,
                 "hood_line": hood_line,
                 "neighborhood_name": neighborhood_name,
+                "neighborhood_names": neighborhood_names,
                 "borough_label": borough_label,
                 "borough_key": borough_key,
                 "listing_type": listing_type,

@@ -26,7 +26,8 @@ Parsed from each index card on `https://www.listingsproject.com/real-estate/new-
 
 | Field | Source |
 |-------|--------|
-| `neighborhood_name` | Text before borough in location line (raw, no normalization) |
+| `neighborhood_name` | Text before borough in location line (raw, as published) |
+| `neighborhood_names` | Canonical name(s) from alias map + fuzzy match; multi-hood listings map to all matches |
 | `borough_label` / `borough_key` | Derived from location line |
 | `listing_type` | Segment after first `\|` (e.g. "Apartments for Sublet") |
 | `description` | `<p class="text-sm leading-normal mb-4">` on card |
@@ -39,7 +40,7 @@ Location line format: `Neighborhood, Borough | Type | optional tags`
 
 - Brooklyn/Queens/Bronx/Staten Island: match borough name in location line
 - **Manhattan**: `, New York` with no other borough token (best-effort heuristic)
-- Neighborhood dropdown cascades from borough; keep raw strings — do not normalize or dedupe aggressively ("Bed Stuy" and "Bedford Stuy" are both valid)
+- Neighborhood dropdown uses **canonical** names (`neighborhood_names`), not raw strings. Aliases live in `NEIGHBORHOOD_ALIASES` in `listing_scraper.py` (e.g. "Bed Stuy" / "Bed-Stuy" → "Bedford-Stuyvesant"). Unmatched tokens stay title-cased. Multi-neighborhood listings (e.g. "Bed-Stuy/Clinton Hill") appear under every matched hood. Cards still show the raw `neighborhood_name`.
 
 ## Date filters (app.py)
 

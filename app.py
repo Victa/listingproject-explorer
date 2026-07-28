@@ -481,7 +481,7 @@ def build_neighborhood_map(rows: list[ListingRow]) -> dict[BoroughKey, list[str]
     for row in rows:
         if row.borough_key == "all":
             continue
-        buckets.setdefault(row.borough_key, set()).add(row.neighborhood_name)
+        buckets.setdefault(row.borough_key, set()).update(row.neighborhood_names)
     return {key: sorted(names) for key, names in buckets.items()}
 
 
@@ -539,7 +539,7 @@ def filter_rows(
             continue
         if borough_keys and row.borough_key not in borough_keys:
             continue
-        if neighborhoods and row.neighborhood_name not in neighborhoods:
+        if neighborhoods and not (neighborhoods & set(row.neighborhood_names)):
             continue
         if property_types and row.listing_type not in property_types:
             continue
@@ -859,6 +859,7 @@ else:
             {
                 "title": r.title,
                 "neighborhood": r.neighborhood_name,
+                "canonical_neighborhoods": "; ".join(r.neighborhood_names),
                 "borough": r.borough_label,
                 "type": r.listing_type,
                 "available_from": r.listing_start.date(),
