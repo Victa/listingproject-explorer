@@ -14,11 +14,16 @@ import httpx
 
 BASE_URL = "https://www.listingsproject.com/real-estate/new-york-city"
 FIRST_ACCESS_BASE = "https://www.listingsproject.com/real-estate/first-access/new-york-city"
+# All NYC real-estate categories. First access offers a shifting subset of these;
+# categories that aren't currently offered 302-redirect and are skipped per crawl
+# (see the ``is_redirect`` guard in ``fetch_all_listings``).
 FIRST_ACCESS_CATEGORIES: tuple[str, ...] = (
     "rentals",
     "studios",
     "sublets",
     "seeking_living",
+    "commercial",
+    "production",
 )
 
 CARD_SPLIT_RE = re.compile(
@@ -689,7 +694,13 @@ def fetch_all_listings(
         for i, (base_url, is_first_access) in enumerate(indexes):
             if i > 0 and request_delay_s > 0:
                 time.sleep(request_delay_s)
-            html = fetch_page(client, base_url, page=1)
+            r = client.get(base_url, params={"page": 1})
+            # A first-access category that isn't offered redirects (302) back to the
+            # base first-access index; skip it instead of aborting the whole crawl.
+            if is_first_access and r.is_redirect:
+                continue
+            r.raise_for_status()
+            html = r.text
             max_page = discover_max_page(html)
             discovered.append((base_url, is_first_access, html, max_page))
 
