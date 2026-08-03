@@ -22,6 +22,7 @@ from listing_scraper import (
     ListingRow,
     fetch_all_listings,
 )
+from styles import inject_theme
 
 FILTERS_FILE = Path(__file__).parent / ".listings_filters.json"
 AUTH_FILE = Path(__file__).parent / ".listings_auth.json"
@@ -576,16 +577,10 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
         with details_col:
             badges: list[str] = []
             if is_new:
-                badges.append(
-                    '<span style="display:inline-block;background:#2563eb;color:#fff;'
-                    "font-size:0.75rem;font-weight:600;padding:0.15rem 0.5rem;"
-                    'border-radius:0.25rem;letter-spacing:0.03em;margin-right:0.35rem;">New</span>'
-                )
+                badges.append('<span class="lp-badge lp-badge-new">New</span>')
             if row.is_first_access:
                 badges.append(
-                    '<span style="display:inline-block;background:#0d9488;color:#fff;'
-                    "font-size:0.75rem;font-weight:600;padding:0.15rem 0.5rem;"
-                    'border-radius:0.25rem;letter-spacing:0.03em;">First access</span>'
+                    '<span class="lp-badge lp-badge-first-access">First access</span>'
                 )
             if badges:
                 st.markdown("".join(badges), unsafe_allow_html=True)
@@ -607,11 +602,7 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
 
 
 st.set_page_config(page_title="Listings Project search", layout="wide")
-st.markdown(
-    "<style>div[class*='st-key-seen_card_']{opacity:0.55;transition:opacity .15s;}"
-    "div[class*='st-key-seen_card_']:hover{opacity:1;}</style>",
-    unsafe_allow_html=True,
-)
+inject_theme()
 st.title("Listings Project — NYC search")
 st.caption(
     "Browse the NYC index with borough, neighborhood, property type, and availability filters."
