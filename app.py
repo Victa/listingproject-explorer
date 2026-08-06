@@ -501,6 +501,7 @@ def _render_photo_carousel(
     html = f"""
 <div class="lp-carousel" id="{root_id}">
   {img_open}<img class="lp-carousel-img" src="{escaped[0]}" alt="Listing photo" />{img_close}
+  <div class="lp-carousel-skeleton" aria-hidden="true"></div>
   <button type="button" class="lp-nav lp-prev" aria-label="Previous photo">&#8249;</button>
   <button type="button" class="lp-nav lp-next" aria-label="Next photo">&#8250;</button>
   <div class="lp-dots">{dots_html}</div>
@@ -530,6 +531,42 @@ def _render_photo_carousel(
     height: 100%;
     object-fit: cover;
     display: block;
+    opacity: 1;
+    transition: opacity 0.18s ease;
+  }}
+  .lp-carousel-skeleton {{
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    background: #e5e5ea;
+    overflow: hidden;
+    transition: opacity 0.12s ease, visibility 0.12s ease;
+  }}
+  .lp-carousel-skeleton::after {{
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.55) 50%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: lp-shimmer 1.1s ease-in-out infinite;
+  }}
+  .lp-carousel.is-loading .lp-carousel-skeleton {{
+    opacity: 1;
+    visibility: visible;
+  }}
+  .lp-carousel.is-loading .lp-carousel-img {{
+    opacity: 0;
+  }}
+  @keyframes lp-shimmer {{
+    100% {{ transform: translateX(100%); }}
   }}
   .lp-nav {{
     position: absolute;
@@ -599,12 +636,69 @@ def _render_photo_carousel(
   if (!root || urls.length < 2) return;
   const img = root.querySelector(".lp-carousel-img");
   const dots = Array.from(root.querySelectorAll(".lp-dot"));
+  const ready = new Set();
   let i = 0;
+  let loadGen = 0;
+
+  function markReady(url) {{
+    ready.add(url);
+  }}
+
+  function prefetch(url) {{
+    if (!url || ready.has(url)) return;
+    const pre = new Image();
+    pre.onload = () => markReady(url);
+    pre.onerror = () => markReady(url);
+    pre.src = url;
+  }}
+
+  function prefetchNeighbors() {{
+    prefetch(urls[(i + 1) % urls.length]);
+    prefetch(urls[(i - 1 + urls.length) % urls.length]);
+  }}
+
+  function finishShow(url, gen) {{
+    if (gen !== loadGen) return;
+    markReady(url);
+    root.classList.remove("is-loading");
+    img.style.opacity = "1";
+    prefetchNeighbors();
+  }}
+
   function show(n) {{
     i = (n + urls.length) % urls.length;
-    img.src = urls[i];
     dots.forEach((d, idx) => d.classList.toggle("is-active", idx === i));
+    const url = urls[i];
+    const gen = ++loadGen;
+
+    if (ready.has(url)) {{
+      root.classList.remove("is-loading");
+      img.style.opacity = "1";
+      img.onload = null;
+      img.onerror = null;
+      img.src = url;
+      prefetchNeighbors();
+      return;
+    }}
+
+    root.classList.add("is-loading");
+    img.style.opacity = "0";
+    img.onload = () => finishShow(url, gen);
+    img.onerror = () => finishShow(url, gen);
+    img.src = url;
+    if (img.complete) finishShow(url, gen);
   }}
+
+  if (img.complete) markReady(urls[0]);
+  else {{
+    img.onload = () => {{
+      markReady(urls[0]);
+      prefetchNeighbors();
+    }};
+    img.onerror = () => markReady(urls[0]);
+  }}
+  prefetchNeighbors();
+
   root.querySelector(".lp-prev").addEventListener("click", (e) => {{
     e.preventDefault();
     e.stopPropagation();
