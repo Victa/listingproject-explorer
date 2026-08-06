@@ -13,10 +13,10 @@ _THEME_CSS = """
 :root {
   --lp-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     Roboto, Helvetica, Arial, sans-serif;
-  --lp-bg: #f5f5f7;
+  --lp-bg: #ffffff;
   --lp-surface: #ffffff;
-  --lp-text: #1d1d1f;
-  --lp-text-secondary: #6e6e73;
+  --lp-text: #000000;
+  --lp-text-secondary: #6b6b6b;
   --lp-accent: #0071e3;
   --lp-accent-hover: #0077ed;
   --lp-accent-tint: rgba(0, 113, 227, 0.12);
@@ -44,8 +44,14 @@ html, body, [class*="css"], .stApp {
 }
 
 .stApp {
-  background-color: var(--lp-bg);
+  background-color: var(--lp-bg) !important;
   color: var(--lp-text);
+}
+
+.stApp [data-testid="stAppViewContainer"],
+.stApp [data-testid="stHeader"],
+.stApp [data-testid="stToolbar"] {
+  background: var(--lp-bg) !important;
 }
 
 /* —— Typography —— */
@@ -65,7 +71,7 @@ h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 .block-container {
   padding-top: 2rem !important;
   padding-bottom: 3rem !important;
-  max-width: 1120px;
+  max-width: 1280px;
 }
 
 /* —— Sidebar: frosted glass —— */
@@ -86,40 +92,270 @@ section[data-testid="stSidebar"] h3 {
   letter-spacing: -0.015em;
 }
 
-/* —— Listing cards (keyed bordered containers in Streamlit 1.56+) —— */
+/* —— Results grid: continuous CSS grid (1 / 2 / 3 by breakpoint) —— */
+div[class*="st-key-listings_grid"] {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 1.5rem 1rem !important;
+  width: 100% !important;
+  align-items: start;
+}
+
+/* Flatten Streamlit chrome so listing cards become the grid items */
+div[class*="st-key-listings_grid"] [data-testid="stVerticalBlockBorderWrapper"],
+div[class*="st-key-listings_grid"] [data-testid="stVerticalBlock"]:not([class*="st-key-new_card_"]):not([class*="st-key-seen_card_"]),
+div[class*="st-key-listings_grid"] [data-testid="stElementContainer"]:has(div[class*="st-key-new_card_"]),
+div[class*="st-key-listings_grid"] [data-testid="stElementContainer"]:has(div[class*="st-key-seen_card_"]) {
+  display: contents !important;
+}
+
+div[class*="st-key-listings_grid"] div[class*="st-key-new_card_"],
+div[class*="st-key-listings_grid"] div[class*="st-key-seen_card_"] {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+@media (min-width: 700px) {
+  div[class*="st-key-listings_grid"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 1000px) {
+  div[class*="st-key-listings_grid"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+/* —— Listing cards (keyed containers in Streamlit 1.56+) —— */
 div[class*="st-key-new_card_"],
 div[class*="st-key-seen_card_"] {
-  background: var(--lp-surface) !important;
-  border: 1px solid var(--lp-hairline) !important;
-  border-radius: var(--lp-radius-card) !important;
-  box-shadow: var(--lp-shadow) !important;
-  padding: var(--lp-space-4) !important;
-  margin-bottom: var(--lp-space-4) !important;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  position: relative !important;
+  container-type: inline-size;
+  width: 100% !important;
+  max-width: 100% !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: visible !important;
+  height: 100%;
+  /* Card IS the vertical block — kill Streamlit’s ~1rem flex gap here */
+  gap: 0 !important;
+  row-gap: 0 !important;
+  column-gap: 0 !important;
 }
 
-div[class*="st-key-new_card_"]:hover,
-div[class*="st-key-seen_card_"]:hover {
-  box-shadow: var(--lp-shadow-hover) !important;
-  transform: translateY(-1px);
+/* Collapse Streamlit’s default vertical rhythm inside each tile */
+div[class*="st-key-new_card_"] [data-testid="stVerticalBlockBorderWrapper"],
+div[class*="st-key-seen_card_"] [data-testid="stVerticalBlockBorderWrapper"],
+div[class*="st-key-new_card_"] [data-testid="stVerticalBlock"],
+div[class*="st-key-seen_card_"] [data-testid="stVerticalBlock"] {
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 0 !important;
+  row-gap: 0 !important;
 }
 
-/* Card images */
+div[class*="st-key-new_card_"] > div,
+div[class*="st-key-seen_card_"] > div,
+div[class*="st-key-new_card_"] [data-testid="stElementContainer"],
+div[class*="st-key-seen_card_"] [data-testid="stElementContainer"],
+div[class*="st-key-new_card_"] [data-testid="stMarkdownContainer"],
+div[class*="st-key-seen_card_"] [data-testid="stMarkdownContainer"],
+div[class*="st-key-new_card_"] [data-testid="stMarkdown"],
+div[class*="st-key-seen_card_"] [data-testid="stMarkdown"],
+div[class*="st-key-new_card_"] [data-testid="stCustomComponentV1"],
+div[class*="st-key-seen_card_"] [data-testid="stCustomComponentV1"] {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+div[class*="st-key-new_card_"] [data-testid="stMarkdownContainer"] p,
+div[class*="st-key-seen_card_"] [data-testid="stMarkdownContainer"] p {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+div[class*="st-key-new_card_"] [data-testid="stCustomComponentV1"],
+div[class*="st-key-seen_card_"] [data-testid="stCustomComponentV1"] {
+  position: relative !important;
+  width: 100% !important;
+  aspect-ratio: 3 / 2 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+div[class*="st-key-new_card_"] iframe,
+div[class*="st-key-seen_card_"] iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2;
+  border: none !important;
+  border-radius: var(--lp-radius-image) !important;
+  display: block;
+  margin: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden;
+}
+
+div[class*="st-key-new_card_"] [data-testid="stImage"],
+div[class*="st-key-seen_card_"] [data-testid="stImage"] {
+  border-radius: var(--lp-radius-image) !important;
+  display: block;
+  margin: 0 !important;
+}
+
 div[class*="st-key-new_card_"] img,
 div[class*="st-key-seen_card_"] img {
   border-radius: var(--lp-radius-image) !important;
   object-fit: cover;
 }
 
-/* Lazy gallery “next” control — first click fetches detail-page photos */
-div[class*="st-key-gal_next_"] {
+.lp-photo-placeholder {
   position: relative;
-  margin-top: -3.25rem;
-  margin-bottom: 1.5rem;
+  z-index: 2;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  background: var(--lp-border);
+  border-radius: var(--lp-radius-image);
+}
+
+/* Full-tile click target over text; photo iframes stack above */
+.lp-card-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+/* Card body — tight stack matching the mockup */
+.lp-card-body {
+  position: relative;
+  z-index: 0;
+  padding: 0.5rem 0 0 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  pointer-events: none;
+}
+
+.lp-card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: #000000 !important;
+  text-decoration: none !important;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lp-card-meta,
+.lp-card-dates {
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: #6b6b6b;
+}
+
+.lp-card-dates-length {
+  font-weight: 400;
+  color: inherit;
+}
+
+.lp-card-dates-sep {
+  color: inherit;
+  font-weight: 400;
+}
+
+.lp-card-price {
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.lp-price-amount {
+  font-weight: 700;
+  color: #000000;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.lp-price-period {
+  font-weight: 400;
+  color: #6b6b6b;
+  text-decoration: none;
+}
+
+.lp-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.lp-badge {
+  display: inline-block;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--lp-radius-pill);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.lp-badge-access {
+  background: #f0f0f2;
+  color: #6b6b6b;
+  font-weight: 500;
+}
+
+.lp-badge-new {
+  background: var(--lp-accent-tint);
+  color: var(--lp-accent);
+}
+
+/* Lazy gallery “next” — mid of the 3:2 photo (photo height = 2/3 of card width) */
+div[class*="st-key-new_card_"] [data-testid="stElementContainer"]:has(div[class*="st-key-gal_next_"]),
+div[class*="st-key-seen_card_"] [data-testid="stElementContainer"]:has(div[class*="st-key-gal_next_"]),
+div[class*="st-key-gal_next_"] {
+  position: absolute !important;
+  top: calc(100cqw * 1 / 3);
+  right: 0.5rem;
+  left: auto !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+  padding: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  z-index: 3;
+}
+
+div[class*="st-key-gal_next_"] {
   display: flex !important;
   justify-content: flex-end;
-  padding-right: 0.5rem;
-  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+div[class*="st-key-new_card_"]:hover div[class*="st-key-gal_next_"],
+div[class*="st-key-seen_card_"]:hover div[class*="st-key-gal_next_"],
+div[class*="st-key-gal_next_"]:focus-within {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 div[class*="st-key-gal_next_"] button {
@@ -134,11 +370,6 @@ div[class*="st-key-gal_next_"] button {
   background: rgba(255, 255, 255, 0.92) !important;
   border: 1px solid var(--lp-border) !important;
   color: var(--lp-text) !important;
-}
-
-div[class*="st-key-gal_next_"] button:hover {
-  background: #fff !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14) !important;
 }
 
 /* —— Buttons / link buttons —— */

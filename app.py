@@ -181,6 +181,36 @@ def _format_stay_length(start: datetime, end: datetime) -> str:
     return _plural(total_days, "day")
 
 
+def _format_short_date(value: datetime | date) -> str:
+    """Abbreviated month date, e.g. 'Aug 6, 2026'."""
+    d = value.date() if isinstance(value, datetime) else value
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
+
+
+def _format_card_date_range(start: datetime, end: datetime) -> str:
+    """Compact range, e.g. 'Oct 15 to Aug 31, 2027' (omit start year when same)."""
+    s = start.date() if isinstance(start, datetime) else start
+    e = end.date() if isinstance(end, datetime) else end
+    if s.year == e.year:
+        return f"{s.strftime('%b')} {s.day} to {e.strftime('%b')} {e.day}, {e.year}"
+    return f"{_format_short_date(s)} to {_format_short_date(e)}"
+
+
+def _format_card_dates_html(row: ListingRow) -> str:
+    """Stay length • compact range, with length in bold black."""
+    range_html = html_lib.escape(
+        _format_card_date_range(row.listing_start, row.listing_end)
+    )
+    length = _format_stay_length(row.listing_start, row.listing_end)
+    if not length:
+        return range_html
+    return (
+        f'<span class="lp-card-dates-length">{html_lib.escape(length)}</span>'
+        f'<span class="lp-card-dates-sep"> • </span>'
+        f"{range_html}"
+    )
+
+
 def _listing_covers_interval(
     listing_start: datetime, listing_end: datetime, interval_start: date, interval_end: date
 ) -> bool:
@@ -448,13 +478,21 @@ def _render_photo_carousel(
     urls: tuple[str, ...],
     *,
     element_id: str,
-    height: int = 220,
+    listing_url: str = "",
+    height: int = 250,
 ) -> None:
     """Client-side carousel (arrows + dots) — no Streamlit rerun on navigation."""
     display = [_large_photo_url(u) or u for u in urls]
     escaped = [html_lib.escape(u, quote=True) for u in display]
     urls_js = json.dumps(display)
     root_id = html_lib.escape(element_id, quote=True)
+    href = html_lib.escape(listing_url, quote=True) if listing_url else ""
+    img_open = (
+        f'<a class="lp-carousel-link" href="{href}" target="_blank" rel="noopener noreferrer">'
+        if href
+        else ""
+    )
+    img_close = "</a>" if href else ""
     dots_html = "".join(
         f'<button type="button" class="lp-dot{" is-active" if i == 0 else ""}" '
         f'data-i="{i}" aria-label="Photo {i + 1}"></button>'
@@ -462,19 +500,30 @@ def _render_photo_carousel(
     )
     html = f"""
 <div class="lp-carousel" id="{root_id}">
-  <img class="lp-carousel-img" src="{escaped[0]}" alt="Listing photo" />
+  {img_open}<img class="lp-carousel-img" src="{escaped[0]}" alt="Listing photo" />{img_close}
   <button type="button" class="lp-nav lp-prev" aria-label="Previous photo">&#8249;</button>
   <button type="button" class="lp-nav lp-next" aria-label="Next photo">&#8250;</button>
   <div class="lp-dots">{dots_html}</div>
 </div>
 <style>
+  html, body {{
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100%;
+  }}
   .lp-carousel {{
     position: relative;
     width: 100%;
-    aspect-ratio: 3 / 2;
-    border-radius: 14px;
+    height: 100%;
     overflow: hidden;
     background: #e5e5ea;
+    border-radius: 14px;
+  }}
+  .lp-carousel-link {{
+    display: block;
+    width: 100%;
+    height: 100%;
   }}
   .lp-carousel-img {{
     width: 100%;
@@ -500,10 +549,13 @@ def _render_photo_carousel(
     justify-content: center;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
     padding: 0;
+    z-index: 2;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
   }}
   .lp-prev {{ left: 8px; }}
   .lp-next {{ right: 8px; }}
-  .lp-nav:hover {{ background: #fff; }}
   .lp-dots {{
     position: absolute;
     left: 0;
@@ -513,6 +565,18 @@ def _render_photo_carousel(
     justify-content: center;
     gap: 5px;
     pointer-events: none;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }}
+  .lp-carousel:hover .lp-nav,
+  .lp-carousel:focus-within .lp-nav {{
+    opacity: 1;
+    pointer-events: auto;
+  }}
+  .lp-carousel:hover .lp-dots,
+  .lp-carousel:focus-within .lp-dots {{
+    opacity: 1;
   }}
   .lp-dot {{
     pointer-events: auto;
@@ -526,7 +590,6 @@ def _render_photo_carousel(
   }}
   .lp-dot.is-active {{
     background: #fff;
-    transform: scale(1.25);
   }}
 </style>
 <script>
@@ -542,9 +605,21 @@ def _render_photo_carousel(
     img.src = urls[i];
     dots.forEach((d, idx) => d.classList.toggle("is-active", idx === i));
   }}
-  root.querySelector(".lp-prev").addEventListener("click", () => show(i - 1));
-  root.querySelector(".lp-next").addEventListener("click", () => show(i + 1));
-  dots.forEach((d) => d.addEventListener("click", () => show(+d.dataset.i)));
+  root.querySelector(".lp-prev").addEventListener("click", (e) => {{
+    e.preventDefault();
+    e.stopPropagation();
+    show(i - 1);
+  }});
+  root.querySelector(".lp-next").addEventListener("click", (e) => {{
+    e.preventDefault();
+    e.stopPropagation();
+    show(i + 1);
+  }});
+  dots.forEach((d) => d.addEventListener("click", (e) => {{
+    e.preventDefault();
+    e.stopPropagation();
+    show(+d.dataset.i);
+  }}));
 }})();
 </script>
 """
@@ -697,66 +772,153 @@ def _card_key_id(url: str) -> str:
     return hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
 
 
+def _format_price_html(price: str) -> str:
+    """Bold underlined amount + muted period label (e.g. monthly)."""
+    raw = (price or "").strip()
+    if not raw or raw == "N/A":
+        return '<span class="lp-price-amount">N/A</span>'
+
+    # "$5,809/mo", "$5,809 / month", or bare "$5,809"
+    m = re.match(
+        r"^(\$\s*[0-9][0-9,]*)\s*(?:/\s*([A-Za-z]+)|(?:\s+(monthly|month|weekly|week|daily|day|nightly|night)))?\s*$",
+        raw,
+        re.IGNORECASE,
+    )
+    if not m:
+        esc = html_lib.escape(raw)
+        return f'<span class="lp-price-amount">{esc}</span>'
+
+    amount = html_lib.escape(re.sub(r"\s+", "", m.group(1)))
+    suffix = (m.group(2) or m.group(3) or "").lower()
+    if suffix in ("", "mo", "month", "monthly"):
+        period = "monthly"
+    elif suffix in ("wk", "week", "weekly"):
+        period = "weekly"
+    elif suffix in ("day", "daily"):
+        period = "daily"
+    elif suffix in ("night", "nightly"):
+        period = "nightly"
+    else:
+        period = suffix
+
+    return (
+        f'<span class="lp-price-amount">{amount}</span>'
+        f' <span class="lp-price-period">{html_lib.escape(period)}</span>'
+    )
+
+
+def _render_single_photo(
+    photo_url: str,
+    *,
+    listing_url: str,
+    height: int = 250,
+) -> None:
+    """Static cover image linked to the listing detail page."""
+    src = html_lib.escape(_large_photo_url(photo_url) or photo_url, quote=True)
+    href = html_lib.escape(listing_url, quote=True)
+    html = f"""
+<a class="lp-photo-link" href="{href}" target="_blank" rel="noopener noreferrer">
+  <img class="lp-photo-img" src="{src}" alt="Listing photo" />
+</a>
+<style>
+  html, body {{
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100%;
+  }}
+  .lp-photo-link {{
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #e5e5ea;
+    border-radius: 14px;
+  }}
+  .lp-photo-img {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }}
+</style>
+"""
+    components.html(html, height=height)
+
+
 def render_listing_card(row: ListingRow, *, is_new: bool, cookie: str | None = None) -> None:
     card_key = f"{'new_card_' if is_new else 'seen_card_'}{_card_key_id(row.url)}"
     gallery_key = _gallery_session_key(card_key)
-    with st.container(border=True, key=card_key):
-        photo_col, details_col = st.columns([1, 3])
+    url_esc = html_lib.escape(row.url, quote=True)
+    with st.container(border=False, key=card_key):
         index_photo = _large_photo_url(row.photo_url)
 
-        with photo_col:
-            if gallery_key in st.session_state:
-                gallery: tuple[str, ...] = st.session_state[gallery_key]
-                if len(gallery) > 1:
-                    _render_photo_carousel(gallery, element_id=f"lp-c-{card_key}")
-                elif gallery:
-                    one = _large_photo_url(gallery[0])
-                    if one:
-                        st.image(one, use_container_width=True)
-                elif index_photo:
-                    st.image(index_photo, use_container_width=True)
+        if gallery_key in st.session_state:
+            gallery: tuple[str, ...] = st.session_state[gallery_key]
+            if len(gallery) > 1:
+                _render_photo_carousel(
+                    gallery,
+                    element_id=f"lp-c-{card_key}",
+                    listing_url=row.url,
+                )
+            elif gallery:
+                one = gallery[0]
+                if one:
+                    _render_single_photo(one, listing_url=row.url)
             elif index_photo:
-                st.image(index_photo, use_container_width=True)
-                if st.button(
-                    "›",
-                    key=f"gal_next_{card_key}",
-                    help="Load all photos",
-                    type="secondary",
-                ):
-                    with st.spinner("Loading photos…"):
-                        fetched = load_listing_photos(row.url, cookie)
-                    if fetched:
-                        st.session_state[gallery_key] = fetched
-                    else:
-                        # Mark loaded so we don't keep offering a dead next control.
-                        st.session_state[gallery_key] = (
-                            (row.photo_url,) if row.photo_url else ()
-                        )
-                    st.rerun()
+                _render_single_photo(index_photo, listing_url=row.url)
+        elif index_photo:
+            _render_single_photo(index_photo, listing_url=row.url)
+            if st.button(
+                "›",
+                key=f"gal_next_{card_key}",
+                help="Load all photos",
+                type="secondary",
+            ):
+                with st.spinner("Loading photos…"):
+                    fetched = load_listing_photos(row.url, cookie)
+                if fetched:
+                    st.session_state[gallery_key] = fetched
+                else:
+                    # Mark loaded so we don't keep offering a dead next control.
+                    st.session_state[gallery_key] = (
+                        (row.photo_url,) if row.photo_url else ()
+                    )
+                st.rerun()
+        else:
+            st.markdown('<div class="lp-photo-placeholder"></div>', unsafe_allow_html=True)
 
-        with details_col:
-            badge_parts: list[str] = []
-            if is_new:
-                badge_parts.append(":blue-badge[New]")
-            if row.is_first_access:
-                badge_parts.append(":green-badge[First access]")
-            if badge_parts:
-                st.markdown(" ".join(badge_parts))
-            location = (
-                f"{row.neighborhood_name}, {row.borough_label}"
-                if row.borough_label
-                else row.neighborhood
-            )
-            st.markdown(f"**{row.title}**")
-            st.caption(f"{location} · {row.listing_type or 'Listing'}")
-            st.markdown(f"**{row.price}**")
-            length = _format_stay_length(row.listing_start, row.listing_end)
-            st.caption(f"{row.availability} ({length})" if length else row.availability)
+        location = (
+            f"{row.neighborhood_name}, {row.borough_label}"
+            if row.borough_label
+            else row.neighborhood
+        )
+        badge_html = ""
+        if is_new:
+            badge_html += '<span class="lp-badge lp-badge-new">New</span>'
+        if row.is_first_access:
+            badge_html += '<span class="lp-badge lp-badge-access">First Access</span>'
 
-            if row.description:
-                st.markdown(row.description)
+        title_esc = html_lib.escape(row.title)
+        location_esc = html_lib.escape(location)
+        type_esc = html_lib.escape(row.listing_type or "Listing")
+        dates_html = _format_card_dates_html(row)
+        price_html = _format_price_html(row.price)
 
-            st.link_button("View on Listings Project", row.url)
+        st.markdown(
+            (
+                f'<a class="lp-card-hit" href="{url_esc}" target="_blank" '
+                f'rel="noopener noreferrer" aria-label="{title_esc}"></a>'
+                f'<div class="lp-card-body">'
+                f'<div class="lp-card-meta">{location_esc} · {type_esc}</div>'
+                f'<div class="lp-card-title">{title_esc}</div>'
+                f'<div class="lp-card-dates">{dates_html}</div>'
+                f'<div class="lp-card-price">{price_html}</div>'
+                f'{f'<div class="lp-card-badges">{badge_html}</div>' if badge_html else ""}'
+                f'</div>'
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 st.set_page_config(page_title="Listings Project search", layout="wide")
@@ -1008,12 +1170,13 @@ st.subheader(subheader)
 if not filtered:
     st.info("No listings match these filters.")
 else:
-    for row in filtered:
-        render_listing_card(
-            row,
-            is_new=row.url in new_urls,
-            cookie=auth_cookie,
-        )
+    with st.container(key="listings_grid"):
+        for row in filtered:
+            render_listing_card(
+                row,
+                is_new=row.url in new_urls,
+                cookie=auth_cookie,
+            )
 
     df = pd.DataFrame(
         [
