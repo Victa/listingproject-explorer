@@ -2,6 +2,7 @@
 .listings_filters.json
 .listings_auth.json
 .listings_seen.json
+.listings_cache.pkl
 .build/
 __pycache__/
 *.pyc
