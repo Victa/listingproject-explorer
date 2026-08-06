@@ -55,5 +55,5 @@ HTML selectors in `listing_scraper.py` drift when the site changes. Key regexes:
 ## Scope
 
 - Extend filters and results UX in `app.py`; keep parsing logic in `listing_scraper.py`
-- Detail pages are fetched **on demand only** for photo galleries (`fetch_listing_photo_urls` / first carousel › click) — do not crawl detail pages during the index refresh
+- Detail pages are fetched for **photo galleries on the current results page** when that page renders (`fetch_listing_photo_urls` / `_prefetch_page_galleries`) — do not crawl detail pages during the index refresh
 - Minimize scope; match existing code style

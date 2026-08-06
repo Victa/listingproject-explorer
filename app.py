@@ -7,6 +7,7 @@ Run: streamlit run app.py
 from __future__ import annotations
 
 import calendar
+import concurrent.futures
 import hashlib
 import html as html_lib
 import json
@@ -51,6 +52,8 @@ DEFAULT_DATES_START = date(2026, 7, 1)
 DEFAULT_DATES_END = date(2026, 7, 14)
 FLEXIBLE_MONTH_COUNT = 12
 WEEK_STAY_DAYS = 7
+RESULTS_PAGE_SIZE = 15
+GALLERY_PREFETCH_WORKERS = 6
 
 
 def _default_filters() -> dict[str, Any]:
@@ -197,7 +200,7 @@ def _format_card_date_range(start: datetime, end: datetime) -> str:
 
 
 def _format_card_dates_html(row: ListingRow) -> str:
-    """Stay length • compact range, with length in bold black."""
+    """Compact date range • stay length, with length in the trailing span."""
     range_html = html_lib.escape(
         _format_card_date_range(row.listing_start, row.listing_end)
     )
@@ -205,10 +208,20 @@ def _format_card_dates_html(row: ListingRow) -> str:
     if not length:
         return range_html
     return (
-        f'<span class="lp-card-dates-length">{html_lib.escape(length)}</span>'
-        f'<span class="lp-card-dates-sep"> • </span>'
         f"{range_html}"
+        f'<span class="lp-card-dates-sep"> • </span>'
+        f'<span class="lp-card-dates-length">{html_lib.escape(length)}</span>'
     )
+
+
+def _should_show_listing_type(listing_type: str) -> bool:
+    """True for specialty types (rooms, art studios, …); hide apartment/house."""
+    t = (listing_type or "").strip().lower()
+    if not t:
+        return False
+    if "apartment" in t or "house" in t:
+        return False
+    return True
 
 
 def _listing_covers_interval(
@@ -470,8 +483,34 @@ def load_listing_photos(url: str, cookie: str | None = None) -> tuple[str, ...]:
         return ()
 
 
-def _gallery_session_key(card_key: str) -> str:
-    return f"_gallery_urls_{card_key}"
+def _gallery_session_key(url: str) -> str:
+    return f"_gallery_urls_{_card_key_id(url)}"
+
+
+def _prefetch_page_galleries(
+    rows: list[ListingRow],
+    cookie: str | None = None,
+) -> None:
+    """Fetch detail galleries for page rows missing from session (parallel, cached)."""
+    pending = [row for row in rows if _gallery_session_key(row.url) not in st.session_state]
+    if not pending:
+        return
+
+    def _fetch_one(row: ListingRow) -> tuple[str, tuple[str, ...]]:
+        fetched = load_listing_photos(row.url, cookie)
+        if fetched:
+            return row.url, fetched
+        fallback: tuple[str, ...] = (row.photo_url,) if row.photo_url else ()
+        return row.url, fallback
+
+    with st.spinner("Loading photos…"):
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=GALLERY_PREFETCH_WORKERS
+        ) as executor:
+            results = list(executor.map(_fetch_one, pending))
+
+    for url, gallery in results:
+        st.session_state[_gallery_session_key(url)] = gallery
 
 
 def _render_photo_carousel(
@@ -866,6 +905,112 @@ def _card_key_id(url: str) -> str:
     return hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
 
 
+def _pagination_page_numbers(page: int, total_pages: int) -> list[int | None]:
+    """Visible page numbers for the pager; ``None`` is an ellipsis gap."""
+    if total_pages <= 7:
+        return list(range(1, total_pages + 1))
+
+    pages: set[int] = {1, total_pages}
+    for p in (page - 1, page, page + 1):
+        if 1 <= p <= total_pages:
+            pages.add(p)
+    if page <= 3:
+        pages.update(range(1, 5))
+    if page >= total_pages - 2:
+        pages.update(range(total_pages - 3, total_pages + 1))
+
+    ordered = sorted(pages)
+    items: list[int | None] = []
+    prev = 0
+    for p in ordered:
+        if prev and p - prev > 1:
+            items.append(None)
+        items.append(p)
+        prev = p
+    return items
+
+
+def _render_results_pagination(page: int, total_pages: int) -> None:
+    """Numbered circle pagination (‹ 1 2 3 … N ›)."""
+    if total_pages <= 1:
+        return
+
+    def _go_to_page(target: int) -> None:
+        st.session_state.results_page = target
+        st.session_state._scroll_results_top = True
+        st.rerun()
+
+    slots: list[tuple[str, int | None]] = [("prev", None)]
+    for item in _pagination_page_numbers(page, total_pages):
+        if item is None:
+            slots.append(("ellipsis", None))
+        else:
+            slots.append(("page", item))
+    slots.append(("next", None))
+
+    with st.container(key="results_pagination"):
+        cols = st.columns(len(slots), gap="small")
+        for col, (kind, value) in zip(cols, slots):
+            with col:
+                if kind == "ellipsis":
+                    st.markdown(
+                        '<div class="lp-page-ellipsis">…</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif kind == "prev":
+                    if st.button(
+                        "‹",
+                        key="results_prev",
+                        disabled=page <= 1,
+                        type="secondary",
+                    ):
+                        _go_to_page(page - 1)
+                elif kind == "next":
+                    if st.button(
+                        "›",
+                        key="results_next",
+                        disabled=page >= total_pages,
+                        type="secondary",
+                    ):
+                        _go_to_page(page + 1)
+                else:
+                    assert value is not None
+                    is_current = value == page
+                    if st.button(
+                        str(value),
+                        key=f"results_page_{value}",
+                        type="primary" if is_current else "secondary",
+                        disabled=is_current,
+                    ):
+                        _go_to_page(value)
+
+
+def _scroll_main_to_top() -> None:
+    """Scroll the Streamlit main pane to the top (used after pagination)."""
+    components.html(
+        """
+<script>
+(function () {
+  const doc = window.parent.document;
+  const candidates = [
+    doc.querySelector('[data-testid="stMain"]'),
+    doc.querySelector('section.main'),
+    doc.querySelector('[data-testid="stAppViewContainer"]'),
+    doc.documentElement,
+  ];
+  for (const el of candidates) {
+    if (el && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+  }
+  window.parent.scrollTo(0, 0);
+})();
+</script>
+        """,
+        height=0,
+    )
+
+
 def _format_price_html(price: str) -> str:
     """Bold underlined amount + muted period label (e.g. monthly)."""
     raw = (price or "").strip()
@@ -940,48 +1085,43 @@ def _render_single_photo(
     components.html(html, height=height)
 
 
-def render_listing_card(row: ListingRow, *, is_new: bool, cookie: str | None = None) -> None:
+def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
     card_key = f"{'new_card_' if is_new else 'seen_card_'}{_card_key_id(row.url)}"
-    gallery_key = _gallery_session_key(card_key)
+    gallery_key = _gallery_session_key(row.url)
     url_esc = html_lib.escape(row.url, quote=True)
     with st.container(border=False, key=card_key):
         index_photo = _large_photo_url(row.photo_url)
+        gallery: tuple[str, ...] | None = st.session_state.get(gallery_key)
 
-        if gallery_key in st.session_state:
-            gallery: tuple[str, ...] = st.session_state[gallery_key]
-            if len(gallery) > 1:
-                _render_photo_carousel(
-                    gallery,
-                    element_id=f"lp-c-{card_key}",
-                    listing_url=row.url,
-                )
-            elif gallery:
-                one = gallery[0]
-                if one:
-                    _render_single_photo(one, listing_url=row.url)
+        if gallery is not None and len(gallery) > 1:
+            _render_photo_carousel(
+                gallery,
+                element_id=f"lp-c-{card_key}",
+                listing_url=row.url,
+            )
+        elif gallery:
+            one = gallery[0]
+            if one:
+                _render_single_photo(one, listing_url=row.url)
             elif index_photo:
                 _render_single_photo(index_photo, listing_url=row.url)
+            else:
+                st.markdown(
+                    '<div class="lp-photo-placeholder"></div>',
+                    unsafe_allow_html=True,
+                )
         elif index_photo:
             _render_single_photo(index_photo, listing_url=row.url)
-            if st.button(
-                "›",
-                key=f"gal_next_{card_key}",
-                help="Load all photos",
-                type="secondary",
-            ):
-                with st.spinner("Loading photos…"):
-                    fetched = load_listing_photos(row.url, cookie)
-                if fetched:
-                    st.session_state[gallery_key] = fetched
-                else:
-                    # Mark loaded so we don't keep offering a dead next control.
-                    st.session_state[gallery_key] = (
-                        (row.photo_url,) if row.photo_url else ()
-                    )
-                st.rerun()
         else:
             st.markdown('<div class="lp-photo-placeholder"></div>', unsafe_allow_html=True)
 
+        badge_html = ""
+        if is_new:
+            badge_html += '<span class="lp-badge lp-badge-new">New</span>'
+        if row.is_first_access:
+            badge_html += '<span class="lp-badge lp-badge-access">First Access</span>'
+
+        title_esc = html_lib.escape(row.title)
         if row.neighborhood_names:
             hood_label = ", ".join(row.neighborhood_names)
         else:
@@ -991,25 +1131,25 @@ def render_listing_card(row: ListingRow, *, is_new: bool, cookie: str | None = N
             if row.borough_label
             else hood_label
         )
-        badge_html = ""
-        if is_new:
-            badge_html += '<span class="lp-badge lp-badge-new">New</span>'
-        if row.is_first_access:
-            badge_html += '<span class="lp-badge lp-badge-access">First Access</span>'
-
-        title_esc = html_lib.escape(row.title)
         location_esc = html_lib.escape(location)
-        type_esc = html_lib.escape(row.listing_type or "Listing")
         dates_html = _format_card_dates_html(row)
         price_html = _format_price_html(row.price)
+        type_html = ""
+        if _should_show_listing_type(row.listing_type):
+            type_html = (
+                f'<div class="lp-card-meta">'
+                f"{html_lib.escape(row.listing_type)}"
+                f"</div>"
+            )
 
         st.markdown(
             (
                 f'<a class="lp-card-hit" href="{url_esc}" target="_blank" '
                 f'rel="noopener noreferrer" aria-label="{title_esc}"></a>'
                 f'<div class="lp-card-body">'
-                f'<div class="lp-card-meta">{location_esc} · {type_esc}</div>'
+                f"{type_html}"
                 f'<div class="lp-card-title">{title_esc}</div>'
+                f'<div class="lp-card-meta">{location_esc}</div>'
                 f'<div class="lp-card-dates">{dates_html}</div>'
                 f'<div class="lp-card-price">{price_html}</div>'
                 f'{f'<div class="lp-card-badges">{badge_html}</div>' if badge_html else ""}'
@@ -1258,23 +1398,59 @@ filtered = filter_rows(
     flexible_months=flexible_months,
 )
 
+filter_fp = json.dumps(
+    {
+        "borough_keys": sorted(selected_borough_keys),
+        "neighborhoods": sorted(selected_neighborhoods),
+        "property_types": sorted(selected_property_types),
+        "first_access_only": bool(st.session_state.get("first_access_only", False)),
+        "new_only": bool(st.session_state.get("new_only", False)),
+        "date_mode": date_mode,
+        "dates_start": dates_start.isoformat() if dates_start else None,
+        "dates_end": dates_end.isoformat() if dates_end else None,
+        "dates_tolerance_days": dates_tolerance_days,
+        "flexible_stay": flexible_stay,
+        "flexible_months": sorted(flexible_months or []),
+    },
+    sort_keys=True,
+)
+if st.session_state.get("_results_filter_fp") != filter_fp:
+    st.session_state._results_filter_fp = filter_fp
+    st.session_state.results_page = 1
+
+total_pages = max(1, (len(filtered) + RESULTS_PAGE_SIZE - 1) // RESULTS_PAGE_SIZE)
+page = int(st.session_state.get("results_page", 1))
+page = max(1, min(page, total_pages))
+st.session_state.results_page = page
+start = (page - 1) * RESULTS_PAGE_SIZE
+end = min(start + RESULTS_PAGE_SIZE, len(filtered))
+page_rows = filtered[start:end]
+
 new_urls: set[str] = st.session_state.get("_new_urls", set())
 new_in_filtered = sum(1 for r in filtered if r.url in new_urls)
 subheader = f"{len(filtered)} listing{'s' if len(filtered) != 1 else ''}"
 if new_in_filtered:
     subheader += f" · {new_in_filtered} new"
+if filtered and len(filtered) > RESULTS_PAGE_SIZE:
+    subheader += f" · showing {start + 1}–{end}"
 st.subheader(subheader)
+
+if st.session_state.pop("_scroll_results_top", False):
+    _scroll_main_to_top()
 
 if not filtered:
     st.info("No listings match these filters.")
 else:
+    _prefetch_page_galleries(page_rows, auth_cookie)
     with st.container(key="listings_grid"):
-        for row in filtered:
+        for row in page_rows:
             render_listing_card(
                 row,
                 is_new=row.url in new_urls,
-                cookie=auth_cookie,
             )
+
+    if total_pages > 1:
+        _render_results_pagination(page, total_pages)
 
     df = pd.DataFrame(
         [

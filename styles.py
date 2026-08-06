@@ -96,7 +96,7 @@ section[data-testid="stSidebar"] h3 {
 div[class*="st-key-listings_grid"] {
   display: grid !important;
   grid-template-columns: 1fr !important;
-  gap: 1.5rem 1rem !important;
+  gap: 1.5rem !important;
   width: 100% !important;
   align-items: start;
 }
@@ -326,50 +326,80 @@ div[class*="st-key-seen_card_"] img {
   color: var(--lp-accent);
 }
 
-/* Lazy gallery “next” — mid of the 3:2 photo (photo height = 2/3 of card width) */
-div[class*="st-key-new_card_"] [data-testid="stElementContainer"]:has(div[class*="st-key-gal_next_"]),
-div[class*="st-key-seen_card_"] [data-testid="stElementContainer"]:has(div[class*="st-key-gal_next_"]),
-div[class*="st-key-gal_next_"] {
-  position: absolute !important;
-  top: calc(100cqw * 1 / 3);
-  right: 0.5rem;
-  left: auto !important;
-  transform: translateY(-50%);
-  margin: 0 !important;
-  padding: 0 !important;
-  width: auto !important;
-  height: auto !important;
-  min-height: 0 !important;
-  z-index: 3;
-}
-
-div[class*="st-key-gal_next_"] {
+/* —— Numbered results pagination —— */
+div[class*="st-key-results_pagination"] {
   display: flex !important;
-  justify-content: flex-end;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
+  justify-content: center !important;
+  margin: 1.75rem 0 0.5rem !important;
 }
 
-div[class*="st-key-new_card_"]:hover div[class*="st-key-gal_next_"],
-div[class*="st-key-seen_card_"]:hover div[class*="st-key-gal_next_"],
-div[class*="st-key-gal_next_"]:focus-within {
-  opacity: 1;
-  pointer-events: auto;
+div[class*="st-key-results_pagination"] [data-testid="stHorizontalBlock"] {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 0.15rem !important;
+  width: auto !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
 }
 
-div[class*="st-key-gal_next_"] button {
-  border-radius: var(--lp-radius-pill) !important;
-  min-width: 28px !important;
-  width: 28px !important;
-  height: 28px !important;
+div[class*="st-key-results_pagination"] [data-testid="stColumn"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+div[class*="st-key-results_pagination"] [data-testid="stElementContainer"],
+div[class*="st-key-results_pagination"] [data-testid="stMarkdownContainer"] {
+  width: auto !important;
+}
+
+div[class*="st-key-results_pagination"] .stButton > button {
+  min-width: 2.25rem !important;
+  width: 2.25rem !important;
+  height: 2.25rem !important;
   padding: 0 !important;
-  font-size: 1.1rem !important;
-  line-height: 1 !important;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12) !important;
-  background: rgba(255, 255, 255, 0.92) !important;
-  border: 1px solid var(--lp-border) !important;
+  border-radius: 50% !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
   color: var(--lp-text) !important;
+  font-size: 0.95rem !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+}
+
+div[class*="st-key-results_pagination"] .stButton > button:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+div[class*="st-key-results_pagination"] .stButton > button[kind="primary"],
+div[class*="st-key-results_pagination"] .stButton > button[kind="primary"]:disabled {
+  background: #1d1d1f !important;
+  color: #ffffff !important;
+  opacity: 1 !important;
+  cursor: default !important;
+}
+
+div[class*="st-key-results_pagination"] .stButton > button:disabled:not([kind="primary"]) {
+  color: #c7c7cc !important;
+  background: transparent !important;
+  opacity: 1 !important;
+}
+
+div[class*="st-key-results_pagination"] .lp-page-ellipsis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  color: var(--lp-text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  line-height: 1;
+  user-select: none;
 }
 
 /* —— Buttons / link buttons —— */
