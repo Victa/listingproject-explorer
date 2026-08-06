@@ -37,7 +37,7 @@ streamlit run app.py
 
 Then open the local URL Streamlit prints (usually `http://localhost:8501`).
 
-Click **Refresh listings** in the sidebar to clear the cache and re-crawl.
+Listings are cached for 6 hours (in memory and on disk). Click **Refresh listings** in the sidebar to force a fresh crawl.
 
 ## Optional: first-access listings
 

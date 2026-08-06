@@ -11,8 +11,9 @@ import concurrent.futures
 import hashlib
 import html as html_lib
 import json
+import pickle
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -32,6 +33,8 @@ from styles import inject_theme
 FILTERS_FILE = Path(__file__).parent / ".listings_filters.json"
 AUTH_FILE = Path(__file__).parent / ".listings_auth.json"
 SEEN_FILE = Path(__file__).parent / ".listings_seen.json"
+LISTINGS_CACHE_FILE = Path(__file__).parent / ".listings_cache.pkl"
+LISTINGS_CACHE_TTL = timedelta(hours=6)
 
 DateFilterMode = Literal["none", "dates", "flexible"]
 FlexibleStay = Literal["week", "month"]
@@ -798,8 +801,57 @@ def _save_seen_urls(urls: set[str]) -> None:
     )
 
 
-@st.cache_data(show_spinner=False)
+def _cookie_cache_key(cookie: str | None) -> str:
+    return hashlib.sha256((cookie or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _read_listings_disk_cache(cookie: str | None) -> list[ListingRow] | None:
+    if not LISTINGS_CACHE_FILE.exists():
+        return None
+    try:
+        with LISTINGS_CACHE_FILE.open("rb") as f:
+            payload = pickle.load(f)
+    except (OSError, pickle.UnpicklingError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    fetched_at = payload.get("fetched_at")
+    rows = payload.get("rows")
+    if not isinstance(fetched_at, datetime) or not isinstance(rows, list):
+        return None
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    if payload.get("cookie_key") != _cookie_cache_key(cookie):
+        return None
+    if datetime.now(timezone.utc) - fetched_at > LISTINGS_CACHE_TTL:
+        return None
+    return rows
+
+
+def _write_listings_disk_cache(rows: list[ListingRow], cookie: str | None) -> None:
+    payload = {
+        "fetched_at": datetime.now(timezone.utc),
+        "cookie_key": _cookie_cache_key(cookie),
+        "rows": rows,
+    }
+    LISTINGS_CACHE_FILE.write_bytes(pickle.dumps(payload))
+
+
+def _clear_listings_disk_cache() -> None:
+    if LISTINGS_CACHE_FILE.exists():
+        LISTINGS_CACHE_FILE.unlink()
+
+
+def _listing_urls_fingerprint(rows: list[ListingRow]) -> frozenset[str]:
+    return frozenset(row.url for row in rows)
+
+
+@st.cache_data(show_spinner=False, ttl=LISTINGS_CACHE_TTL)
 def load_listings(cookie: str | None = None) -> list[ListingRow]:
+    cached = _read_listings_disk_cache(cookie)
+    if cached is not None:
+        return cached
+
     progress_ph = st.empty()
 
     def on_progress(page: int, total: int) -> None:
@@ -809,9 +861,12 @@ def load_listings(cookie: str | None = None) -> list[ListingRow]:
         )
 
     try:
-        return fetch_all_listings(progress=on_progress, cookie=cookie)
+        rows = fetch_all_listings(progress=on_progress, cookie=cookie)
     finally:
         progress_ph.empty()
+
+    _write_listings_disk_cache(rows, cookie)
+    return rows
 
 
 def build_neighborhood_map(rows: list[ListingRow]) -> dict[BoroughKey, list[str]]:
@@ -1207,18 +1262,13 @@ st.caption(
 
 _init_filters()
 
-# New browser session: force a fresh crawl and recompute new-vs-seen.
-if not st.session_state.get("_session_booted"):
-    load_listings.clear()
-    st.session_state.pop("_seen_initialized", None)
-    st.session_state._session_booted = True
-
 auth_cookie = _load_auth_cookie()
 
 # Clear cache and continue this run (no early rerun) so filter widgets still
 # render and Streamlit does not wipe their session_state keys.
 if st.sidebar.button("Refresh listings"):
     load_listings.clear()
+    _clear_listings_disk_cache()
     st.session_state.pop("_seen_initialized", None)
     st.session_state._apply_filters_to_widgets = True
 
@@ -1229,11 +1279,16 @@ except Exception as e:
     st.error(f"Request failed: {e}")
     st.stop()
 
-if not st.session_state.get("_seen_initialized"):
+listing_fp = _listing_urls_fingerprint(all_rows)
+if (
+    not st.session_state.get("_seen_initialized")
+    or st.session_state.get("_listing_urls_fp") != listing_fp
+):
     seen = _load_seen_urls()
-    current = {r.url for r in all_rows}
+    current = set(listing_fp)
     st.session_state._new_urls = current - seen
     _save_seen_urls(seen | current)
+    st.session_state._listing_urls_fp = listing_fp
     st.session_state._seen_initialized = True
 
 if auth_cookie and not any(r.is_first_access for r in all_rows):
