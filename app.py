@@ -7,6 +7,8 @@ Run: streamlit run app.py
 from __future__ import annotations
 
 import calendar
+import hashlib
+import html as html_lib
 import json
 import re
 from datetime import date, datetime, timedelta
@@ -16,11 +18,13 @@ from typing import Any, Callable, Literal
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from listing_scraper import (
     BoroughKey,
     ListingRow,
     fetch_all_listings,
+    fetch_listing_photo_urls,
 )
 from styles import inject_theme
 
@@ -416,10 +420,135 @@ def _collect_filters_from_widgets(
 
 
 def _large_photo_url(url: str | None) -> str | None:
-    """Bump Bunny CDN ``width=`` so thumbnails stay sharp when shown taller."""
+    """Bump Bunny CDN sizing so thumbnails stay sharp when shown taller."""
     if not url:
         return None
-    return re.sub(r"(?<=[?&])width=\d+", "width=720", url)
+    bumped = re.sub(r"(?<=[?&])width=\d+", "width=720", url)
+    bumped = re.sub(r"(?<=[?&])height=\d+", "height=720", bumped)
+    if "width=" not in bumped and "height=" not in bumped:
+        sep = "&" if "?" in bumped else "?"
+        bumped = f"{bumped}{sep}width=720"
+    return bumped
+
+
+@st.cache_data(show_spinner=False)
+def load_listing_photos(url: str, cookie: str | None = None) -> tuple[str, ...]:
+    """Cached detail-page gallery URLs for a listing (empty if fetch/parse fails)."""
+    try:
+        return fetch_listing_photo_urls(url, cookie=cookie)
+    except Exception:
+        return ()
+
+
+def _gallery_session_key(card_key: str) -> str:
+    return f"_gallery_urls_{card_key}"
+
+
+def _render_photo_carousel(
+    urls: tuple[str, ...],
+    *,
+    element_id: str,
+    height: int = 220,
+) -> None:
+    """Client-side carousel (arrows + dots) — no Streamlit rerun on navigation."""
+    display = [_large_photo_url(u) or u for u in urls]
+    escaped = [html_lib.escape(u, quote=True) for u in display]
+    urls_js = json.dumps(display)
+    root_id = html_lib.escape(element_id, quote=True)
+    dots_html = "".join(
+        f'<button type="button" class="lp-dot{" is-active" if i == 0 else ""}" '
+        f'data-i="{i}" aria-label="Photo {i + 1}"></button>'
+        for i in range(len(escaped))
+    )
+    html = f"""
+<div class="lp-carousel" id="{root_id}">
+  <img class="lp-carousel-img" src="{escaped[0]}" alt="Listing photo" />
+  <button type="button" class="lp-nav lp-prev" aria-label="Previous photo">&#8249;</button>
+  <button type="button" class="lp-nav lp-next" aria-label="Next photo">&#8250;</button>
+  <div class="lp-dots">{dots_html}</div>
+</div>
+<style>
+  .lp-carousel {{
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #e5e5ea;
+  }}
+  .lp-carousel-img {{
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }}
+  .lp-nav {{
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.88);
+    color: #1d1d1f;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+    padding: 0;
+  }}
+  .lp-prev {{ left: 8px; }}
+  .lp-next {{ right: 8px; }}
+  .lp-nav:hover {{ background: #fff; }}
+  .lp-dots {{
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 8px;
+    display: flex;
+    justify-content: center;
+    gap: 5px;
+    pointer-events: none;
+  }}
+  .lp-dot {{
+    pointer-events: auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    border: none;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.55);
+    cursor: pointer;
+  }}
+  .lp-dot.is-active {{
+    background: #fff;
+    transform: scale(1.25);
+  }}
+</style>
+<script>
+(function() {{
+  const urls = {urls_js};
+  const root = document.getElementById("{root_id}");
+  if (!root || urls.length < 2) return;
+  const img = root.querySelector(".lp-carousel-img");
+  const dots = Array.from(root.querySelectorAll(".lp-dot"));
+  let i = 0;
+  function show(n) {{
+    i = (n + urls.length) % urls.length;
+    img.src = urls[i];
+    dots.forEach((d, idx) => d.classList.toggle("is-active", idx === i));
+  }}
+  root.querySelector(".lp-prev").addEventListener("click", () => show(i - 1));
+  root.querySelector(".lp-next").addEventListener("click", () => show(i + 1));
+  dots.forEach((d) => d.addEventListener("click", () => show(+d.dataset.i)));
+}})();
+</script>
+"""
+    components.html(html, height=height)
 
 
 def _load_auth_cookie() -> str | None:
@@ -564,26 +693,55 @@ def filter_rows(
     return filtered
 
 
-def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
-    card_key = f"{'new_card_' if is_new else 'seen_card_'}{abs(hash(row.url))}"
+def _card_key_id(url: str) -> str:
+    return hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
+
+
+def render_listing_card(row: ListingRow, *, is_new: bool, cookie: str | None = None) -> None:
+    card_key = f"{'new_card_' if is_new else 'seen_card_'}{_card_key_id(row.url)}"
+    gallery_key = _gallery_session_key(card_key)
     with st.container(border=True, key=card_key):
         photo_col, details_col = st.columns([1, 3])
-        photo = _large_photo_url(row.photo_url)
+        index_photo = _large_photo_url(row.photo_url)
 
         with photo_col:
-            if photo:
-                st.image(photo, use_container_width=True)
+            if gallery_key in st.session_state:
+                gallery: tuple[str, ...] = st.session_state[gallery_key]
+                if len(gallery) > 1:
+                    _render_photo_carousel(gallery, element_id=f"lp-c-{card_key}")
+                elif gallery:
+                    one = _large_photo_url(gallery[0])
+                    if one:
+                        st.image(one, use_container_width=True)
+                elif index_photo:
+                    st.image(index_photo, use_container_width=True)
+            elif index_photo:
+                st.image(index_photo, use_container_width=True)
+                if st.button(
+                    "›",
+                    key=f"gal_next_{card_key}",
+                    help="Load all photos",
+                    type="secondary",
+                ):
+                    with st.spinner("Loading photos…"):
+                        fetched = load_listing_photos(row.url, cookie)
+                    if fetched:
+                        st.session_state[gallery_key] = fetched
+                    else:
+                        # Mark loaded so we don't keep offering a dead next control.
+                        st.session_state[gallery_key] = (
+                            (row.photo_url,) if row.photo_url else ()
+                        )
+                    st.rerun()
 
         with details_col:
-            badges: list[str] = []
+            badge_parts: list[str] = []
             if is_new:
-                badges.append('<span class="lp-badge lp-badge-new">New</span>')
+                badge_parts.append(":blue-badge[New]")
             if row.is_first_access:
-                badges.append(
-                    '<span class="lp-badge lp-badge-first-access">First access</span>'
-                )
-            if badges:
-                st.markdown("".join(badges), unsafe_allow_html=True)
+                badge_parts.append(":green-badge[First access]")
+            if badge_parts:
+                st.markdown(" ".join(badge_parts))
             location = (
                 f"{row.neighborhood_name}, {row.borough_label}"
                 if row.borough_label
@@ -610,12 +768,20 @@ st.caption(
 
 _init_filters()
 
+# New browser session: force a fresh crawl and recompute new-vs-seen.
+if not st.session_state.get("_session_booted"):
+    load_listings.clear()
+    st.session_state.pop("_seen_initialized", None)
+    st.session_state._session_booted = True
+
 auth_cookie = _load_auth_cookie()
 
+# Clear cache and continue this run (no early rerun) so filter widgets still
+# render and Streamlit does not wipe their session_state keys.
 if st.sidebar.button("Refresh listings"):
     load_listings.clear()
     st.session_state.pop("_seen_initialized", None)
-    st.rerun()
+    st.session_state._apply_filters_to_widgets = True
 
 try:
     with st.spinner("Loading listings from listingsproject.com…"):
@@ -843,7 +1009,11 @@ if not filtered:
     st.info("No listings match these filters.")
 else:
     for row in filtered:
-        render_listing_card(row, is_new=row.url in new_urls)
+        render_listing_card(
+            row,
+            is_new=row.url in new_urls,
+            cookie=auth_cookie,
+        )
 
     df = pd.DataFrame(
         [

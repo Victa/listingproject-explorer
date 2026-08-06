@@ -95,22 +95,13 @@ div[class*="st-key-seen_card_"] {
   box-shadow: var(--lp-shadow) !important;
   padding: var(--lp-space-4) !important;
   margin-bottom: var(--lp-space-4) !important;
-  transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.15s ease;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 div[class*="st-key-new_card_"]:hover,
 div[class*="st-key-seen_card_"]:hover {
   box-shadow: var(--lp-shadow-hover) !important;
   transform: translateY(-1px);
-}
-
-/* Seen cards stay muted until hover (preserve existing UX) */
-div[class*="st-key-seen_card_"] {
-  opacity: 0.55;
-}
-
-div[class*="st-key-seen_card_"]:hover {
-  opacity: 1;
 }
 
 /* Card images */
@@ -120,27 +111,34 @@ div[class*="st-key-seen_card_"] img {
   object-fit: cover;
 }
 
-/* —— Pill badges —— */
-.lp-badge {
-  display: inline-block;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 0.2rem 0.65rem;
-  border-radius: var(--lp-radius-pill);
-  margin-right: 0.4rem;
-  margin-bottom: 0.35rem;
-  line-height: 1.3;
+/* Lazy gallery “next” control — first click fetches detail-page photos */
+div[class*="st-key-gal_next_"] {
+  position: relative;
+  margin-top: -3.25rem;
+  margin-bottom: 1.5rem;
+  display: flex !important;
+  justify-content: flex-end;
+  padding-right: 0.5rem;
+  z-index: 2;
 }
 
-.lp-badge-new {
-  background: var(--lp-accent-tint);
-  color: var(--lp-accent);
+div[class*="st-key-gal_next_"] button {
+  border-radius: var(--lp-radius-pill) !important;
+  min-width: 28px !important;
+  width: 28px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  font-size: 1.1rem !important;
+  line-height: 1 !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12) !important;
+  background: rgba(255, 255, 255, 0.92) !important;
+  border: 1px solid var(--lp-border) !important;
+  color: var(--lp-text) !important;
 }
 
-.lp-badge-first-access {
-  background: var(--lp-teal-tint);
-  color: var(--lp-teal);
+div[class*="st-key-gal_next_"] button:hover {
+  background: #fff !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14) !important;
 }
 
 /* —— Buttons / link buttons —— */

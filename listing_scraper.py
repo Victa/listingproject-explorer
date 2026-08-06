@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import difflib
 import html as html_lib
+import json
 import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Callable, Literal
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -51,6 +53,10 @@ DESC_RE = re.compile(
 SEE_MORE_RE = re.compile(
     r"""<a\b[^>]*>\s*See more\s*</a>""",
     re.IGNORECASE,
+)
+LD_JSON_RE = re.compile(
+    r"""<script\s+type=["']application/ld\+json["']>(.*?)</script>""",
+    re.IGNORECASE | re.DOTALL,
 )
 
 BoroughKey = Literal["all", "brooklyn", "queens", "bronx", "staten_island", "manhattan"]
@@ -427,6 +433,88 @@ def _extract_listing_thumb_url(chunk: str) -> str | None:
     return None
 
 
+def _normalize_detail_photo_url(raw: str) -> str | None:
+    """Absolute HTTPS photo URL without CDN sizing query params."""
+    url = html_lib.unescape(raw.strip())
+    if not url:
+        return None
+    if url.startswith("//"):
+        url = "https:" + url
+    if not url.startswith("https://"):
+        return None
+    parsed = urlparse(url)
+    # Drop height=/width=/aspect_ratio= so the UI can request a display size.
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
+def _dedupe_photo_urls(candidates: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in candidates:
+        url = _normalize_detail_photo_url(raw)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return tuple(out)
+
+
+def _photo_urls_from_listing_images(html: str) -> tuple[str, ...]:
+    candidates: list[str] = []
+    for m in re.finditer(r"<img[^>]+>", html, flags=re.I):
+        tag = m.group(0)
+        if "listing_image" not in tag.lower():
+            continue
+        sm = re.search(r'src\s*=\s*"([^"]+)"', tag, flags=re.I)
+        if sm:
+            candidates.append(sm.group(1))
+    return _dedupe_photo_urls(candidates)
+
+
+def _photo_urls_from_ld_json(html: str) -> tuple[str, ...]:
+    candidates: list[str] = []
+    for m in LD_JSON_RE.finditer(html):
+        try:
+            data = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        images = data.get("image")
+        if isinstance(images, str):
+            candidates.append(images)
+        elif isinstance(images, list):
+            candidates.extend(u for u in images if isinstance(u, str))
+    return _dedupe_photo_urls(candidates)
+
+
+def parse_listing_photo_urls(html: str) -> tuple[str, ...]:
+    """Photo URLs from a listing detail page (``listing_image``, else JSON-LD)."""
+    urls = _photo_urls_from_listing_images(html)
+    if urls:
+        return urls
+    return _photo_urls_from_ld_json(html)
+
+
+def fetch_listing_photo_urls(
+    url: str,
+    *,
+    cookie: str | None = None,
+) -> tuple[str, ...]:
+    """GET a listing detail page and return gallery photo URLs (may be empty)."""
+    headers: dict[str, str] = {"User-Agent": "ListingProjectLocalTool/1.0"}
+    if cookie:
+        headers["Cookie"] = cookie
+    with httpx.Client(
+        timeout=30.0,
+        headers=headers,
+        follow_redirects=True,
+    ) as client:
+        r = client.get(url)
+        r.raise_for_status()
+        return parse_listing_photo_urls(r.text)
+
+
 @dataclass(frozen=True)
 class ListingRow:
     title: str
@@ -672,7 +760,7 @@ def fetch_all_listings(
     client: httpx.Client | None = None,
     cookie: str | None = None,
 ) -> list[ListingRow]:
-    """Crawl NYC public index (and first-access when ``cookie`` is set); dedupe by URL."""
+    """Crawl NYC indexes (first-access when ``cookie`` is set, then public); dedupe by URL."""
     own_client = client is None
     if own_client:
         headers: dict[str, str] = {"User-Agent": "ListingProjectLocalTool/1.0"}
@@ -680,10 +768,13 @@ def fetch_all_listings(
             headers["Cookie"] = cookie
         client = httpx.Client(timeout=30.0, headers=headers)
 
-    indexes: list[tuple[str, bool]] = [(BASE_URL, False)]
+    # First-access before public so FA listings win URL dedupe and keep
+    # is_first_access=True when they also appear on the public index.
+    indexes: list[tuple[str, bool]] = []
     if cookie:
         for category in FIRST_ACCESS_CATEGORIES:
             indexes.append((f"{FIRST_ACCESS_BASE}/{category}", True))
+    indexes.append((BASE_URL, False))
 
     seen_urls: set[str] = set()
     results: list[ListingRow] = []
