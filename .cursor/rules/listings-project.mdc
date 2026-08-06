@@ -40,7 +40,7 @@ Location line format: `Neighborhood, Borough | Type | optional tags`
 
 - Brooklyn/Queens/Bronx/Staten Island: match borough name in location line
 - **Manhattan**: `, New York` with no other borough token (best-effort heuristic)
-- Neighborhood dropdown uses **canonical** names (`neighborhood_names`), not raw strings. Aliases live in `NEIGHBORHOOD_ALIASES` in `listing_scraper.py` (e.g. "Bed Stuy" / "Bed-Stuy" → "Bedford-Stuyvesant"). Unmatched tokens stay title-cased. Multi-neighborhood listings (e.g. "Bed-Stuy/Clinton Hill") appear under every matched hood. Cards still show the raw `neighborhood_name`.
+- Neighborhood dropdown and cards use **canonical** names (`neighborhood_names`), not raw strings. Aliases live in `NEIGHBORHOOD_ALIASES` in `listing_scraper.py` (e.g. "Bed Stuy" / "Bed-Stuy" → "Bedford-Stuyvesant"). Unmatched/junk tokens are dropped. Multi-neighborhood listings (e.g. "Bed-Stuy/Clinton Hill") appear under every matched hood. Cards show joined canonical names (raw kept for CSV).
 
 ## Date filters (app.py)
 

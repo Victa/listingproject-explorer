@@ -982,10 +982,14 @@ def render_listing_card(row: ListingRow, *, is_new: bool, cookie: str | None = N
         else:
             st.markdown('<div class="lp-photo-placeholder"></div>', unsafe_allow_html=True)
 
+        if row.neighborhood_names:
+            hood_label = ", ".join(row.neighborhood_names)
+        else:
+            hood_label = row.neighborhood_name or row.neighborhood
         location = (
-            f"{row.neighborhood_name}, {row.borough_label}"
+            f"{hood_label}, {row.borough_label}"
             if row.borough_label
-            else row.neighborhood
+            else hood_label
         )
         badge_html = ""
         if is_new:
