@@ -1011,34 +1011,76 @@ def _scroll_main_to_top() -> None:
     )
 
 
+_PRICE_RE = re.compile(
+    r"^(\$\s*[0-9][0-9,]*)\s*(?:/\s*([A-Za-z]+)|(?:\s+(monthly|month|weekly|week|daily|day|nightly|night)))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_price_period(suffix: str) -> str:
+    """Map scraped price suffix to a canonical period label."""
+    s = (suffix or "").lower()
+    if s in ("", "mo", "month", "monthly"):
+        return "monthly"
+    if s in ("wk", "week", "weekly"):
+        return "weekly"
+    if s in ("day", "daily"):
+        return "daily"
+    if s in ("night", "nightly"):
+        return "nightly"
+    return s
+
+
+def _parse_price(price: str) -> tuple[int, str] | None:
+    """Parse scraped price into (amount_dollars, period) or None if unparseable."""
+    raw = (price or "").strip()
+    if not raw or raw == "N/A":
+        return None
+    m = _PRICE_RE.match(raw)
+    if not m:
+        return None
+    digits = re.sub(r"[^\d]", "", m.group(1))
+    if not digits:
+        return None
+    period = _normalize_price_period(m.group(2) or m.group(3) or "")
+    return int(digits), period
+
+
+def _listing_stay_days(start: datetime, end: datetime) -> int:
+    """Inclusive availability length in days."""
+    return (end.date() - start.date()).days + 1
+
+
+def _display_price_for_row(row: ListingRow) -> str:
+    """Price string for cards; convert daily/nightly/weekly to monthly when stay > 30 days."""
+    parsed = _parse_price(row.price)
+    if parsed is None:
+        return row.price
+    amount, period = parsed
+    if _listing_stay_days(row.listing_start, row.listing_end) <= 30:
+        return row.price
+    if period in ("daily", "nightly"):
+        monthly = amount * 30
+    elif period == "weekly":
+        monthly = amount * 4
+    else:
+        return row.price
+    return f"${monthly:,}/mo"
+
+
 def _format_price_html(price: str) -> str:
     """Bold underlined amount + muted period label (e.g. monthly)."""
     raw = (price or "").strip()
     if not raw or raw == "N/A":
         return '<span class="lp-price-amount">N/A</span>'
 
-    # "$5,809/mo", "$5,809 / month", or bare "$5,809"
-    m = re.match(
-        r"^(\$\s*[0-9][0-9,]*)\s*(?:/\s*([A-Za-z]+)|(?:\s+(monthly|month|weekly|week|daily|day|nightly|night)))?\s*$",
-        raw,
-        re.IGNORECASE,
-    )
+    m = _PRICE_RE.match(raw)
     if not m:
         esc = html_lib.escape(raw)
         return f'<span class="lp-price-amount">{esc}</span>'
 
     amount = html_lib.escape(re.sub(r"\s+", "", m.group(1)))
-    suffix = (m.group(2) or m.group(3) or "").lower()
-    if suffix in ("", "mo", "month", "monthly"):
-        period = "monthly"
-    elif suffix in ("wk", "week", "weekly"):
-        period = "weekly"
-    elif suffix in ("day", "daily"):
-        period = "daily"
-    elif suffix in ("night", "nightly"):
-        period = "nightly"
-    else:
-        period = suffix
+    period = _normalize_price_period(m.group(2) or m.group(3) or "")
 
     return (
         f'<span class="lp-price-amount">{amount}</span>'
@@ -1133,7 +1175,7 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
         )
         location_esc = html_lib.escape(location)
         dates_html = _format_card_dates_html(row)
-        price_html = _format_price_html(row.price)
+        price_html = _format_price_html(_display_price_for_row(row))
         type_html = ""
         if _should_show_listing_type(row.listing_type):
             type_html = (
