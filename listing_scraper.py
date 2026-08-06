@@ -109,16 +109,23 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Crown Heights": ("crown heights",),
         "Weeksville": ("weeksville",),
         "Bushwick": ("bushwick",),
-        "East Williamsburg": ("east williamsburg",),
-        "Williamsburg": ("williamsburg", "wburg", "wburg."),
+        "East Williamsburg": ("east williamsburg", "east williamburg"),
+        "Williamsburg": (
+            "williamsburg",
+            "wburg",
+            "wburg.",
+            "north williamsburg",
+            "south williamsburg",
+            "williamburg",
+        ),
         "Greenpoint": ("greenpoint",),
         "Dumbo": ("dumbo", "d.u.m.b.o.", "down under the manhattan bridge overpass"),
         "Brooklyn Heights": ("brooklyn heights",),
         "Cobble Hill": ("cobble hill",),
         "Carroll Gardens": ("carroll gardens",),
-        "Boerum Hill": ("boerum hill",),
+        "Boerum Hill": ("boerum hill", "boerum"),
         "Gowanus": ("gowanus",),
-        "Red Hook": ("red hook",),
+        "Red Hook": ("red hook", "red hood"),
         "Downtown Brooklyn": ("downtown brooklyn", "downtown bk"),
         "Navy Yard": ("navy yard", "brooklyn navy yard"),
         "Vinegar Hill": ("vinegar hill",),
@@ -126,7 +133,8 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Windsor Terrace": ("windsor terrace",),
         "Kensington": ("kensington",),
         "Ditmas Park": ("ditmas park",),
-        "Midwood": ("midwood",),
+        "Midwood": ("midwood", "south midwood"),
+        "Homecrest": ("homecrest",),
         "Marine Park": ("marine park",),
         "Canarsie": ("canarsie",),
         "East New York": ("east new york", "eny"),
@@ -138,12 +146,21 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Columbia Street Waterfront": (
             "columbia street waterfront",
             "columbia waterfront",
+            "columbia st waterfront",
+            "columbia st waterfront district",
+            "columbia street waterfront district",
         ),
     },
     "manhattan": {
         "Upper West Side": ("upper west side", "uws"),
         "Upper East Side": ("upper east side", "ues"),
-        "Midtown": ("midtown", "midtown manhattan"),
+        "Midtown": (
+            "midtown",
+            "midtown manhattan",
+            "herald square",
+            "herald sq",
+            "koreatown",
+        ),
         "Midtown East": ("midtown east",),
         "Midtown West": ("midtown west",),
         "Hell's Kitchen": ("hells kitchen", "hell's kitchen", "clinton"),
@@ -156,7 +173,7 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Union Square": ("union square",),
         "Greenwich Village": ("greenwich village", "the village"),
         "West Village": ("west village",),
-        "East Village": ("east village",),
+        "East Village": ("east village", "alphabet city"),
         "Lower East Side": ("lower east side", "les"),
         "SoHo": ("soho", "so ho"),
         "NoHo": ("noho", "no ho"),
@@ -168,7 +185,7 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Battery Park City": ("battery park city", "bpc"),
         "Civic Center": ("civic center",),
         "Two Bridges": ("two bridges",),
-        "Harlem": ("harlem",),
+        "Harlem": ("harlem", "south harlem"),
         "East Harlem": ("east harlem", "spanish harlem", "el barrio"),
         "Central Harlem": ("central harlem",),
         "West Harlem": ("west harlem",),
@@ -180,7 +197,7 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
         "Lincoln Square": ("lincoln square",),
         "Theater District": ("theater district", "theatre district"),
         "Times Square": ("times square",),
-        "Hudson Yards": ("hudson yards",),
+        "Hudson Yards": ("hudson yards", "hudson yard"),
         "Meatpacking District": ("meatpacking district", "meatpacking", "meat packing"),
         "Stuyvesant Town": ("stuyvesant town", "stuy town"),
         "Peter Cooper Village": ("peter cooper village",),
@@ -318,11 +335,26 @@ NEIGHBORHOOD_ALIASES: dict[BoroughKey, dict[str, tuple[str, ...]]] = {
 }
 
 _BOROUGH_STRIP_RE = re.compile(
-    r""",?\s*(?:Brooklyn|Queens|Bronx|Staten Island|Manhattan|New York)\s*$""",
+    r""",?\s*(?:Brooklyn|Queens|Bronx|Staten Island|Manhattan|New York(?:\s+City)?)\s*$""",
     re.IGNORECASE,
 )
-_HOOD_SPLIT_RE = re.compile(r"\s*[,/&]|\s+and\s+", re.IGNORECASE)
+_HOOD_SPLIT_RE = re.compile(r"\s*[,/;|&]|\s+and\s+", re.IGNORECASE)
+_PAREN_RE = re.compile(r"\(([^)]*)\)")
+_APOSTROPHE_RE = re.compile(r"['\u2019\u2018]")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
+_STREET_TOKEN_RE = re.compile(
+    r"^.+\s+(?:ave|avenue|av|st|street|rd|road|blvd|boulevard)$",
+    re.IGNORECASE,
+)
+_FLUFF_SUFFIX_RE = re.compile(
+    r"\s+(?:border|area)\s*$",
+    re.IGNORECASE,
+)
+_JUNK_TOKEN_RE = re.compile(
+    r"^(?:steps away from|not too far(?: from the city)?|open to more|within a|etc)\b",
+    re.IGNORECASE,
+)
+_STRIP_LEADING_FLUFF_RE = re.compile(r"^(?:prime)\s+", re.IGNORECASE)
 _BOROUGH_TOKEN_NORMS = frozenset(
     {
         "brooklyn",
@@ -331,15 +363,25 @@ _BOROUGH_TOKEN_NORMS = frozenset(
         "staten island",
         "manhattan",
         "new york",
+        "new york city",
         "nyc",
+        "bk",
+        "ny",
+        "manhatten",
+        "brookyln",
+        "north brooklyn",
+        "lower manhattan",
+        "upper manhattan",
+        "downtown manhattan",
     }
 )
 _FUZZY_CUTOFF = 0.82
 
 
 def _normalize_hood(s: str) -> str:
-    """Lowercase, unescape, drop punctuation/hyphens, collapse whitespace."""
+    """Lowercase, unescape, drop apostrophes/punctuation/hyphens, collapse whitespace."""
     t = html_lib.unescape(s).lower().strip()
+    t = _APOSTROPHE_RE.sub("", t)
     t = _NON_ALNUM_RE.sub(" ", t)
     return re.sub(r"\s+", " ", t).strip()
 
@@ -347,24 +389,136 @@ def _normalize_hood(s: str) -> str:
 def _build_alias_lookups() -> tuple[
     dict[BoroughKey, dict[str, str]],
     dict[BoroughKey, list[str]],
+    dict[str, str],
+    list[str],
 ]:
-    """Build normalized alias -> canonical lookup and canonical name lists per borough."""
+    """Build per-borough and unique global alias lookups plus canonical name lists."""
     alias_lookup: dict[BoroughKey, dict[str, str]] = {}
     canonical_by_borough: dict[BoroughKey, list[str]] = {}
+    global_hits: dict[str, set[str]] = {}
+    all_canonicals: list[str] = []
     for borough_key, aliases in NEIGHBORHOOD_ALIASES.items():
         lookup: dict[str, str] = {}
         canonicals: list[str] = []
         for canonical, alias_list in aliases.items():
             canonicals.append(canonical)
-            lookup[_normalize_hood(canonical)] = canonical
-            for alias in alias_list:
-                lookup[_normalize_hood(alias)] = canonical
+            all_canonicals.append(canonical)
+            for raw in (canonical, *alias_list):
+                norm = _normalize_hood(raw)
+                if not norm:
+                    continue
+                lookup[norm] = canonical
+                global_hits.setdefault(norm, set()).add(canonical)
         alias_lookup[borough_key] = lookup
         canonical_by_borough[borough_key] = canonicals
-    return alias_lookup, canonical_by_borough
+    global_lookup = {
+        norm: next(iter(cans)) for norm, cans in global_hits.items() if len(cans) == 1
+    }
+    return alias_lookup, canonical_by_borough, global_lookup, all_canonicals
 
 
-_ALIAS_LOOKUP, _CANONICAL_BY_BOROUGH = _build_alias_lookups()
+(
+    _ALIAS_LOOKUP,
+    _CANONICAL_BY_BOROUGH,
+    _GLOBAL_ALIAS_LOOKUP,
+    _ALL_CANONICALS,
+) = _build_alias_lookups()
+_GLOBAL_NORM_TO_CANONICAL = {_normalize_hood(c): c for c in _ALL_CANONICALS}
+_GLOBAL_FUZZY_CHOICES = list(_GLOBAL_NORM_TO_CANONICAL.keys())
+
+
+def _is_junk_token(norm: str) -> bool:
+    """True for borough leftovers, streets, and marketing fluff — not real hoods."""
+    if not norm or norm in _BOROUGH_TOKEN_NORMS:
+        return True
+    if _JUNK_TOKEN_RE.search(norm):
+        return True
+    if _STREET_TOKEN_RE.search(norm):
+        return True
+    # Multi-borough marketing lists / non-locations
+    if " or " in norm or "open to" in norm:
+        return True
+    return False
+
+
+def _extract_hood_tokens(first_segment: str) -> list[str]:
+    """Split a location segment into neighborhood candidate tokens."""
+    stripped = first_segment.strip()
+    if not stripped:
+        return []
+
+    tokens: list[str] = []
+    for part in _HOOD_SPLIT_RE.split(stripped):
+        part = part.strip()
+        if not part:
+            continue
+        # Pull parenthetical aliases out as their own tokens
+        for inner in _PAREN_RE.findall(part):
+            inner = inner.strip()
+            if inner:
+                tokens.append(inner)
+        part = _PAREN_RE.sub(" ", part)
+        # Drop street-intersection suffixes like "Franklyn Av x Lafayette Av"
+        part = re.sub(r"\s*[-–]\s*.*\bx\b.*$", "", part, flags=re.I).strip()
+        part = _FLUFF_SUFFIX_RE.sub("", part).strip()
+        part = _BOROUGH_STRIP_RE.sub("", part).strip()
+        part = _STRIP_LEADING_FLUFF_RE.sub("", part).strip()
+        part = re.sub(r"\s+", " ", part).strip(" -–")
+        if part:
+            tokens.append(part)
+    return tokens
+
+
+def _match_hood_token(
+    token: str,
+    borough_key: BoroughKey,
+) -> list[str]:
+    """
+    Resolve one token to zero or more canonical neighborhood names.
+    Uses borough-local alias/fuzzy, then unique global alias, then global fuzzy.
+    Unmatched tokens are dropped (not title-cased into the filter).
+    """
+    norm = _normalize_hood(token)
+    if _is_junk_token(norm):
+        return []
+
+    lookup = _ALIAS_LOOKUP.get(borough_key, {})
+    local_canonicals = _CANONICAL_BY_BOROUGH.get(borough_key, [])
+    local_norm_to_canonical = {_normalize_hood(c): c for c in local_canonicals}
+    local_fuzzy = list(local_norm_to_canonical.keys())
+
+    matched = lookup.get(norm)
+    if matched is None and local_fuzzy:
+        close = difflib.get_close_matches(norm, local_fuzzy, n=1, cutoff=_FUZZY_CUTOFF)
+        if close:
+            matched = local_norm_to_canonical[close[0]]
+
+    if matched is None:
+        matched = _GLOBAL_ALIAS_LOOKUP.get(norm)
+
+    if matched is None and _GLOBAL_FUZZY_CHOICES:
+        close = difflib.get_close_matches(
+            norm, _GLOBAL_FUZZY_CHOICES, n=1, cutoff=_FUZZY_CUTOFF
+        )
+        if close:
+            matched = _GLOBAL_NORM_TO_CANONICAL[close[0]]
+
+    if matched is not None:
+        return [matched]
+
+    # Compound like "BedStuy-Clinton Hill": try hyphen parts when whole token misses
+    if "-" in token or "–" in token:
+        parts = re.split(r"[-–]", token)
+        hits: list[str] = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            hits.extend(_match_hood_token(part, borough_key))
+        if hits:
+            return hits
+
+    return []
 
 
 def _canonicalize_neighborhoods(
@@ -373,50 +527,20 @@ def _canonicalize_neighborhoods(
     """
     Map a free-text location segment to one or more canonical neighborhood names.
 
-    Splits on commas/slashes/ampersands, matches each token via alias map then
-    fuzzy fallback; unmatched tokens are kept title-cased.
+    Splits on commas/slashes/semicolons/ampersands, matches each token via
+    borough alias map then global fallback; unmatched/junk tokens are dropped.
     """
-    stripped = _BOROUGH_STRIP_RE.sub("", first_segment).strip()
-    if not stripped:
-        return ()
-
-    tokens = [t.strip() for t in _HOOD_SPLIT_RE.split(stripped) if t.strip()]
+    tokens = _extract_hood_tokens(first_segment)
     if not tokens:
-        cleaned = re.sub(r"\s+", " ", stripped).strip()
-        return (cleaned,) if cleaned else ()
-
-    lookup = _ALIAS_LOOKUP.get(borough_key, {})
-    canonicals = _CANONICAL_BY_BOROUGH.get(borough_key, [])
-    # Normalized canonical -> display name for fuzzy result mapping
-    norm_to_canonical = {_normalize_hood(c): c for c in canonicals}
-    fuzzy_choices = list(norm_to_canonical.keys())
+        return ()
 
     seen: set[str] = set()
     result: list[str] = []
     for token in tokens:
-        # Drop street-intersection suffixes like "Franklyn Av x Lafayette Av"
-        token = re.sub(r"\s*[-–]\s*.*\bx\b.*$", "", token, flags=re.I).strip()
-        if not token:
-            continue
-        norm = _normalize_hood(token)
-        if not norm or norm in _BOROUGH_TOKEN_NORMS:
-            continue
-
-        matched: str | None = lookup.get(norm)
-        if matched is None and fuzzy_choices:
-            close = difflib.get_close_matches(
-                norm, fuzzy_choices, n=1, cutoff=_FUZZY_CUTOFF
-            )
-            if close:
-                matched = norm_to_canonical[close[0]]
-
-        if matched is None:
-            # Title-case the cleaned token for display
-            matched = " ".join(w.capitalize() for w in norm.split())
-
-        if matched not in seen:
-            seen.add(matched)
-            result.append(matched)
+        for matched in _match_hood_token(token, borough_key):
+            if matched not in seen:
+                seen.add(matched)
+                result.append(matched)
 
     return tuple(result)
 
@@ -614,8 +738,6 @@ def _parse_location_line(
         neighborhood_name = first_segment.strip()
 
     neighborhood_names = _canonicalize_neighborhoods(first_segment, borough_key)
-    if not neighborhood_names and neighborhood_name:
-        neighborhood_names = (neighborhood_name,)
 
     return neighborhood_name, neighborhood_names, borough_label, listing_type, borough_key
 
