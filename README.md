@@ -4,6 +4,12 @@ Personal Streamlit app for searching NYC listings on [listingsproject.com](https
 
 Fetches the public NYC index once, caches it, then filters in memory — no re-crawl when you change filters.
 
+## Demo
+
+Try the live demo: [listings-projects.streamlit.app](https://listings-projects.streamlit.app/)
+
+Note: the demo runs with public access only. If you have a listingsproject.com membership and want to use your personal token for first-access listings, you'll need to [run the app locally](#setup) and [set up your token](#optional-first-access-listings).
+
 ## Features
 
 - **Borough, neighborhood, and property-type filters** — multi-select popovers; neighborhoods are canonicalized (e.g. "Bed Stuy" → "Bedford-Stuyvesant")
