@@ -1148,14 +1148,11 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
             elif index_photo:
                 _render_single_photo(index_photo, listing_url=row.url)
             else:
-                st.markdown(
-                    '<div class="lp-photo-placeholder"></div>',
-                    unsafe_allow_html=True,
-                )
+                st.html('<div class="lp-photo-placeholder"></div>')
         elif index_photo:
             _render_single_photo(index_photo, listing_url=row.url)
         else:
-            st.markdown('<div class="lp-photo-placeholder"></div>', unsafe_allow_html=True)
+            st.html('<div class="lp-photo-placeholder"></div>')
 
         badge_html = ""
         if is_new:
@@ -1184,7 +1181,8 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
                 f"</div>"
             )
 
-        st.markdown(
+        # st.html avoids Streamlit markdown/KaTeX rewriting titles like "$1,000..." or "*Sale*".
+        st.html(
             (
                 f'<a class="lp-card-hit" href="{url_esc}" target="_blank" '
                 f'rel="noopener noreferrer" aria-label="{title_esc}"></a>'
@@ -1197,7 +1195,6 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
                 f'{f'<div class="lp-card-badges">{badge_html}</div>' if badge_html else ""}'
                 f'</div>'
             ),
-            unsafe_allow_html=True,
         )
 
 
