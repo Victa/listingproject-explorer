@@ -11,7 +11,7 @@ OPEN="/usr/bin/open"
 CURL="/usr/bin/curl"
 
 alert() {
-	osascript -e "display alert \"Listings Project\" message \"$1\" as critical" 2>/dev/null || true
+	osascript -e "display alert \"ListingProject Advanced Search\" message \"$1\" as critical" 2>/dev/null || true
 }
 
 mkdir -p "$(dirname "$LOG")"

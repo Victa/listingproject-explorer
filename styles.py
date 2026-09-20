@@ -490,6 +490,31 @@ div[data-testid="stProgressBar"] > div > div {
 div[data-testid="stAlert"] {
   border-radius: var(--lp-radius-control) !important;
 }
+/* Refresh feedback stays subtle and honors the system motion preference. */
+@keyframes lp-arrive {
+  from { opacity: .45; }
+  to { opacity: 1; }
+}
+@keyframes lp-new-highlight {
+  from { box-shadow: 0 0 0 3px rgba(13, 148, 136, .35); }
+  to { box-shadow: var(--lp-shadow); }
+}
+div[class*="st-key-seen_card_"] { animation: lp-arrive .24s ease-out; }
+div[class*="st-key-new_card_"] { animation: lp-arrive .24s ease-out, lp-new-highlight 1.6s ease-out; }
+.lp-loading-skeleton {
+  height: 220px;
+  border-radius: var(--lp-radius-card);
+  background: linear-gradient(100deg, #f5f5f7 30%, #eaecef 50%, #f5f5f7 70%);
+  background-size: 200% 100%;
+  animation: lp-skeleton 1.8s ease-in-out infinite;
+}
+@keyframes lp-skeleton { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  div[class*="st-key-new_card_"], div[class*="st-key-seen_card_"], .lp-loading-skeleton {
+    animation: none !important;
+    transition: none !important;
+  }
+}
 </style>
 """
 
