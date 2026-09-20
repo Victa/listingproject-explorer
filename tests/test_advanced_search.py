@@ -269,7 +269,7 @@ class FakeStore:
         nyc_listing = replace(listing(NYC,url='https://example.com/nyc',area='Greenpoint'),
                               borough_label='Brooklyn', borough_key='brooklyn')
         self.state=dict(rows=[listing(), nyc_listing],
-                        regions={'paris':PARIS,NYC_REGION:NYC}, errors={}, refreshing=True,
+                        regions={'paris':PARIS,NYC_REGION:NYC}, errors={}, refreshing=False,
                         completed=1,total=2,revision=1,cycle=0,updated_at=1,last_complete=0)
         self.starts=[]
     def start(self,force=False):
@@ -490,6 +490,23 @@ class PageTests(unittest.TestCase):
         self.assertIn(True, UI_STORE.starts)
         self.assertEqual(app.session_state['region_keys'],['paris'])
         self.assertEqual(app.session_state['results_page'],2)
+
+    def test_refresh_button_disabled_while_refreshing(self):
+        UI_STORE.state.update(refreshing=True)
+        app=self.app.run()
+        btn=app.button(key='refresh_listings')
+        self.assertTrue(btn.disabled)
+        self.assertIn('Refreshing', btn.label)
+
+    def test_manual_refresh_completion_toast_without_new_listings(self):
+        app=self.app.run()
+        app.button(key='refresh_listings').click().run()
+        self.assertTrue(app.session_state['_refresh_toast_pending'])
+        UI_STORE.state.update(revision=2,cycle=1,refreshing=False)
+        app.run()
+        self.assertEqual(list(app.exception),[])
+        self.assertEqual(len(app.toast),1)
+        self.assertIn('Listings refreshed',app.toast[0].value)
 
     def test_refresh_status_is_in_sidebar_and_errors_are_in_main(self):
         UI_STORE.state.update(refreshing=False,errors={
