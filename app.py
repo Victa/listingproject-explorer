@@ -816,6 +816,9 @@ def _show_refresh_status(snapshot: dict):
     elif snapshot["updated_at"]:
         updated = datetime.fromtimestamp(snapshot["updated_at"]).strftime("%b %d, %I:%M %p")
         st.caption(f"Cached results · last updated {updated}")
+
+
+def _show_refresh_errors(snapshot: dict):
     for source, message in snapshot["errors"].items():
         st.warning(_refresh_error_message(source, message, snapshot["regions"]))
 
@@ -1253,6 +1256,8 @@ for key in ("borough_keys", "neighborhoods", "property_types"):
 
 with st.sidebar, st.container(key="sidebar_filters"):
     st.header("Filters")
+    st.toggle("First access only", key="first_access_only", width="stretch")
+    st.toggle("New only", key="new_only", width="stretch")
     region_options = sorted(set(regions) | set(st.session_state.get("region_keys", [])),
                             key=lambda key: regions[key].label if key in regions else key)
     selected_regions = st.multiselect(
@@ -1260,8 +1265,6 @@ with st.sidebar, st.container(key="sidebar_filters"):
         format_func=lambda key: regions[key].label if key in regions else key.replace("-", " ").title(),
         on_change=_region_changed,
     )
-    st.checkbox("First access only", key="first_access_only")
-    st.checkbox("New only", key="new_only")
     selected_borough_keys = set()
     if selected_regions == [NYC_REGION]:
         borough_labels = {key: label for label, key in BOROUGH_LABELS}
@@ -1365,11 +1368,12 @@ with st.sidebar, st.container(key="sidebar_filters"):
         st.session_state._apply_filters_to_widgets = True
         st.rerun()
 
-    _refresh_monitor(store)
-
 with st.sidebar, st.container(key="sidebar_footer"):
+    _refresh_monitor(store)
     st.button("Refresh listings", key="refresh_listings", use_container_width=True,
-              on_click=store.start, kwargs={"force": True})
+              type="primary", on_click=store.start, kwargs={"force": True})
+
+_show_refresh_errors(snapshot)
 
 filtered = filter_rows(
     all_rows,

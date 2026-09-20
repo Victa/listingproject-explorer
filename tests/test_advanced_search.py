@@ -321,6 +321,39 @@ class PageTests(unittest.TestCase):
         self.assertEqual(app.multiselect(key='neighborhoods').value,[])
         self.assertEqual(app.multiselect(key='property_types').value,[])
 
+    def test_boolean_toggles_filter_restore_and_clear(self):
+        first_url='https://example.com/first-access'
+        new_url='https://example.com/new-only'
+        UI_STORE.state['rows']=[
+            replace(listing(url=first_url), is_first_access=True),
+            listing(url=new_url),
+        ]
+        (Path(self.temp.name)/'.listings_seen.json').write_text(json.dumps({
+            'seen_urls':[first_url],
+        }))
+        app=self.app.run()
+        self.assertFalse(app.toggle(key='first_access_only').value)
+        self.assertFalse(app.toggle(key='new_only').value)
+
+        app.toggle(key='first_access_only').set_value(True).run()
+        self.assertIn('1 listing',app.main.subheader[-1].value)
+        app.toggle(key='first_access_only').set_value(False).run()
+        app.toggle(key='new_only').set_value(True).run()
+        self.assertIn('1 listing',app.main.subheader[-1].value)
+        app.toggle(key='first_access_only').set_value(True).run()
+        self.assertIn('0 listings',app.main.subheader[-1].value)
+        app.toggle(key='first_access_only').set_value(False).run()
+
+        saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
+        self.assertFalse(saved['first_access_only'])
+        self.assertTrue(saved['new_only'])
+        restored=self.app.run()
+        self.assertTrue(restored.toggle(key='new_only').value)
+
+        restored.button[0].click().run()
+        self.assertFalse(restored.toggle(key='first_access_only').value)
+        self.assertFalse(restored.toggle(key='new_only').value)
+
     def test_background_addition_toast_once_preserves_filter(self):
         app=self.app.run()
         app.multiselect(key='region_keys').set_value(['paris']).run()
@@ -367,7 +400,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(app.multiselect(key='region_keys').value,['paris'])
         self.assertEqual(app.session_state['results_page'],2)
 
-    def test_refresh_status_and_errors_are_visible_in_sidebar(self):
+    def test_refresh_status_is_in_sidebar_and_errors_are_in_main(self):
         UI_STORE.state.update(refreshing=False,errors={
             'first':'No first-access regions available; check membership/session',
             'public:paris':'Paris: Temporarily unavailable',
@@ -376,7 +409,8 @@ class PageTests(unittest.TestCase):
         self.assertEqual(list(app.exception),[])
         self.assertEqual(len(app.expander),0)
         self.assertTrue(any('Cached results' in c.value for c in app.sidebar.caption))
-        warnings=[w.value for w in app.sidebar.warning]
+        self.assertEqual(list(app.sidebar.warning),[])
+        warnings=[w.value for w in app.main.warning]
         self.assertTrue(any('First-access listings could not be checked' in warning for warning in warnings))
         self.assertTrue(any('Paris (public listings) could not be refreshed' in warning for warning in warnings))
 

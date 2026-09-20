@@ -76,6 +76,8 @@ h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 
 /* —— Sidebar: frosted glass —— */
 section[data-testid="stSidebar"] {
+  width: min(324px, 85vw) !important;
+  min-width: min(324px, 85vw) !important;
   background: rgba(255, 255, 255, 0.72) !important;
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
@@ -132,6 +134,37 @@ section[data-testid="stSidebar"] .st-key-sidebar_footer {
   border-top: 1px solid var(--lp-border);
   background: var(--lp-surface);
   padding: 1rem 0 max(1rem, env(safe-area-inset-bottom));
+  gap: 0.5rem !important;
+}
+
+/* The pinned refresh action is the sidebar's strong, monochrome CTA. */
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"] {
+  background: #000 !important;
+  border-color: #000 !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:hover:not(:disabled) {
+  background: #1d1d1f !important;
+  border-color: #1d1d1f !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:active:not(:disabled) {
+  background: #333336 !important;
+  border-color: #333336 !important;
+  transform: scale(0.99);
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:focus-visible {
+  outline: 3px solid rgba(0, 113, 227, 0.35) !important;
+  outline-offset: 2px;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:disabled {
+  background: #8e8e93 !important;
+  border-color: #8e8e93 !important;
+  color: #fff !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer [data-testid="stCaptionContainer"] {
+  margin-top: 0.25rem;
+  text-align: center;
 }
 
 /* —— Results grid: continuous CSS grid (1 / 2 / 3 by breakpoint) —— */
