@@ -161,6 +161,22 @@ section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings
   background: #8e8e93 !important;
   border-color: #8e8e93 !important;
   color: #fff !important;
+  cursor: default !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:disabled::before {
+  content: "";
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.45em;
+  vertical-align: -0.1em;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: lp-spin 0.75s linear infinite;
+}
+@keyframes lp-spin {
+  to { transform: rotate(360deg); }
 }
 section[data-testid="stSidebar"] .st-key-sidebar_footer [data-testid="stCaptionContainer"] {
   margin-top: 0.25rem;

@@ -846,6 +846,11 @@ def _show_refresh_errors(snapshot: dict):
         st.warning(_refresh_error_message(source, message, snapshot["regions"]))
 
 
+def _on_refresh_listings(store: ListingsStore) -> None:
+    st.session_state["_refresh_toast_pending"] = True
+    store.start(force=True)
+
+
 @st.fragment(run_every=1)
 def _refresh_monitor(store: ListingsStore):
     store.start()
@@ -1412,8 +1417,17 @@ with st.sidebar, st.container(key="sidebar_filters"):
 
 with st.sidebar, st.container(key="sidebar_footer"):
     _refresh_monitor(store)
-    st.button("Refresh listings", key="refresh_listings", use_container_width=True,
-              type="primary", on_click=store.start, kwargs={"force": True})
+    footer_snapshot = store.snapshot()
+    refreshing = footer_snapshot["refreshing"]
+    st.button(
+        "Refreshing…" if refreshing else "Refresh listings",
+        key="refresh_listings",
+        use_container_width=True,
+        type="primary",
+        disabled=refreshing,
+        on_click=_on_refresh_listings,
+        args=(store,),
+    )
 
 _show_refresh_errors(snapshot)
 
@@ -1482,8 +1496,11 @@ if st.session_state.pop("_scroll_results_top", False):
 if refresh_completed:
     st.session_state._store_cycle = snapshot["cycle"]
     additions = st.session_state._pending_added & {row.url for row in filtered}
+    pending_toast = st.session_state.pop("_refresh_toast_pending", False)
     if additions and st.session_state._notify_refresh:
         st.toast(f"{len(additions)} new listing{'s' if len(additions) != 1 else ''} match your search.", icon="✨")
+    elif pending_toast:
+        st.toast("Listings refreshed.", icon="✅")
     st.session_state._pending_added = set()
     st.session_state._notify_refresh = True
 
