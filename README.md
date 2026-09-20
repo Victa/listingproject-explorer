@@ -13,7 +13,9 @@ Note: the demo runs with public access only. If you have a listingsproject.com m
 ## Features
 
 - **Region filter** — searchable multi-select, with all regions selected by default. Newly offered regions are discovered automatically.
-- **Location and property-type filters** — areas are scoped to their regions; NYC searches also offer boroughs and canonicalized neighborhoods (e.g. "Bed Stuy" → "Bedford-Stuyvesant").
+- **Location filters** — areas are scoped to their regions; NYC searches also offer boroughs and canonicalized neighborhoods (e.g. "Bed Stuy" → "Bedford-Stuyvesant"). Long selected labels wrap without truncation.
+- **Listings, space type, and arrangement filters** — browse All posts (the default), Available spaces, or Wanted posts. Select space types independently of Rent, Buy, Sublet, Share, Swap, or House sitting. No arrangement boxes checked means all arrangements. Apartment + House with Rent + Sublet includes all four combinations.
+- **Source-aware categories** — unspecified arrangements remain Unspecified; unknown categories stay visible under All posts and Other / unspecified without guessing from titles. Arrangement options adapt to location, post kind, and space selections; selected options stay removable even with no matches.
 - **Background refresh** — keep browsing while regional snapshots update, with subtle new-card highlights and a toast when new results match your filters. Gallery photos load separately.
 - **Date availability** — any dates, exact check-in/check-out (with optional ± flexibility), or flexible week/month stays across selected months
 - **New listings** — highlights listings you haven't seen yet across refreshes
@@ -41,7 +43,7 @@ Then open the local URL Streamlit prints (usually `http://localhost:8501`).
 
 Listings remain fresh for 6 hours (in memory and on disk). Older cached results stay visible while the app refreshes in the background. Click **Refresh listings** to refresh immediately without clearing your results. A failed regional request retains that region's previous snapshot; refresh details explain what could not be updated. While a session is open, failed refreshes can retry after five minutes.
 
-Existing NYC caches and saved searches migrate automatically. Existing searches retain an explicit NYC selection; **Clear filters** starts a search across all regions. Listings without specified dates appear under **Any dates**. Prices retain the source currency; non-dollar prices are displayed as provided.
+Existing NYC caches and saved searches migrate automatically. Legacy property categories migrate once to independent space and arrangement filters, with a notice that additional combinations can be included. Clear filters restores All posts and unrestricted space types and arrangements. Original source categories remain on cards and in CSV exports. Existing searches retain an explicit NYC selection; **Clear filters** starts a search across all regions. Listings without specified dates appear under **Any dates**. Prices retain the source currency; non-dollar prices are displayed as provided.
 
 Versioned JSON caches are separated by access context. The old local pickle cache is read only to migrate this app's existing data. Keep cache files private and never substitute files from untrusted sources. Filters and seen history are local to the installation, as in the original app; this is not a multi-account preference service.
 

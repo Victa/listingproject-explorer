@@ -15,6 +15,8 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
+from listing_categories import classify_category
+
 SITE_URL = "https://www.listingsproject.com"
 REGIONS_URL = f"{SITE_URL}/real-estate"
 FIRST_ACCESS_URL = f"{REGIONS_URL}/first-access"
@@ -786,8 +788,10 @@ def _parse_location_line(
     """
     normalized = _normalize_title(raw_line)
     parts = [p.strip() for p in normalized.split("|")]
-    first_segment = parts[0] if parts else normalized
-    listing_type = parts[1] if len(parts) > 1 else ""
+    category_segments = [p for p in parts if classify_category(p).post_kind != "unknown"]
+    listing_type = category_segments[-1] if category_segments else (parts[-1] if len(parts) > 1 else "")
+    location_segments = [p for p in parts if p not in category_segments] if category_segments else parts[:1]
+    first_segment = ", ".join(location_segments)
 
     borough_key = _derive_borough_key(first_segment) if region_key == NYC_REGION else "all"
     if borough_key == "all":

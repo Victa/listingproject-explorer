@@ -549,6 +549,27 @@ div[data-testid="stCheckbox"] label {
   font-size: 0.95rem;
 }
 
+/* Keep long sidebar selections readable without hiding removal controls. */
+.st-key-sidebar_filters [data-baseweb="tag"] {
+  height: auto !important;
+  max-width: 100% !important;
+  flex-shrink: 1 !important;
+}
+.st-key-sidebar_filters [data-baseweb="tag"] span {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  max-width: none !important;
+}
+.st-key-sidebar_filters [data-baseweb="tag"] [role="button"] {
+  flex-shrink: 0 !important;
+}
+[role="option"], [role="option"] > div {
+  white-space: normal !important;
+  height: auto !important;
+  overflow-wrap: anywhere;
+}
 /* Multiselect tags as pills */
 span[data-baseweb="tag"] {
   border-radius: var(--lp-radius-pill) !important;

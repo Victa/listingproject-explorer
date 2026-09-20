@@ -27,6 +27,7 @@ from listing_scraper import (
     NYC_REGION,
     fetch_listing_photo_urls,
 )
+from listing_categories import (SPACE_TYPES, ARRANGEMENTS, POST_KINDS, classify_category, migrate_category_filters)
 from styles import inject_theme
 from listings_store import ListingsStore, access_key
 
@@ -62,7 +63,10 @@ def _default_filters() -> dict[str, Any]:
         "region_keys": [],
         "borough_keys": [],
         "neighborhoods": [],
-        "property_types": [],
+        "filter_version": 2,
+        "space_types": [],
+        "arrangements": [],
+        "post_kind": "all",
         "first_access_only": False,
         "new_only": False,
         "date_mode": "none",
@@ -298,6 +302,7 @@ def _migrate_legacy_date_mode(raw: dict[str, Any], defaults: dict[str, Any]) -> 
 
 
 def _validate_filters(raw: dict[str, Any]) -> dict[str, Any]:
+    raw = migrate_category_filters(raw)
     defaults = _default_filters()
     borough_keys = [
         k for k in raw.get("borough_keys", []) if k in ALL_BOROUGH_KEYS
@@ -305,7 +310,8 @@ def _validate_filters(raw: dict[str, Any]) -> dict[str, Any]:
     regions = [r for r in raw.get("region_keys", [NYC_REGION]) if isinstance(r, str)]
     neighborhoods = [n if "::" in n else f"{NYC_REGION}::{n}"
                      for n in raw.get("neighborhoods", []) if isinstance(n, str)]
-    property_types = [t for t in raw.get("property_types", []) if isinstance(t, str)]
+    space_types = [t for t in raw.get("space_types", []) if t in SPACE_TYPES]
+    arrangements = [t for t in raw.get("arrangements", []) if t in ARRANGEMENTS]
     migrated = _migrate_legacy_date_mode(raw, defaults)
     date_mode = migrated["date_mode"]
     if date_mode not in VALID_DATE_MODES:
@@ -324,7 +330,10 @@ def _validate_filters(raw: dict[str, Any]) -> dict[str, Any]:
         "region_keys": regions,
         "borough_keys": borough_keys if regions == [NYC_REGION] else [],
         "neighborhoods": neighborhoods,
-        "property_types": property_types,
+        "filter_version": 2,
+        "space_types": space_types,
+        "arrangements": arrangements,
+        "post_kind": raw.get("post_kind") if raw.get("post_kind") in POST_KINDS else "all",
         "first_access_only": bool(raw.get("first_access_only", False)),
         "new_only": bool(raw.get("new_only", False)),
         "date_mode": date_mode,
@@ -341,6 +350,8 @@ def _load_persisted_filters() -> dict[str, Any] | None:
         return None
     try:
         raw = json.loads(FILTERS_FILE.read_text(encoding="utf-8"))
+        if raw.get("filter_version", 0) < 2 and raw.get("property_types"):
+            st.session_state._category_migration_notice = True
         return _validate_filters(raw)
     except (json.JSONDecodeError, TypeError, OSError):
         return None
@@ -357,6 +368,10 @@ def _clear_persisted_filters() -> None:
 
 def _init_filters() -> None:
     if st.session_state.get("_filters_initialized"):
+        if st.session_state.filters.get("filter_version", 0) < 2:
+            st.session_state._category_migration_notice = bool(st.session_state.filters.get("property_types"))
+            st.session_state.filters = _validate_filters(st.session_state.filters)
+            st.session_state._apply_filters_to_widgets = True
         return
 
     loaded = _load_persisted_filters()
@@ -366,8 +381,11 @@ def _init_filters() -> None:
 
 
 def _sync_widget_keys_from_filters(filters: dict[str, Any]) -> None:
-    for key in ("region_keys", "borough_keys", "neighborhoods", "property_types"):
+    for key in ("region_keys", "borough_keys", "neighborhoods", "space_types"):
         st.session_state[key] = list(filters.get(key, []))
+    st.session_state["post_kind"] = filters["post_kind"]
+    for key in ARRANGEMENTS:
+        st.session_state[f"arrangement_{key}"] = key in filters["arrangements"]
     st.session_state["date_mode"] = filters["date_mode"]
     st.session_state["dates_start"] = (
         _parse_date(filters["dates_start"]) or DEFAULT_DATES_START
@@ -385,13 +403,17 @@ def _sync_widget_keys_from_filters(filters: dict[str, Any]) -> None:
 def _collect_filters_from_widgets() -> dict[str, Any]:
     borough_keys = list(st.session_state.get("borough_keys", []))
     neighborhoods = list(st.session_state.get("neighborhoods", []))
-    property_types = list(st.session_state.get("property_types", []))
+    space_types = list(st.session_state.get("space_types", []))
+    arrangements = [key for key in ARRANGEMENTS if st.session_state.get(f"arrangement_{key}", False)]
     date_mode: DateFilterMode = st.session_state.get("date_mode", "none")
     filters: dict[str, Any] = {
         "region_keys": list(st.session_state.get("region_keys", [])),
         "borough_keys": borough_keys if st.session_state.get("region_keys") == [NYC_REGION] else [],
         "neighborhoods": neighborhoods,
-        "property_types": property_types,
+        "filter_version": 2,
+        "space_types": space_types,
+        "arrangements": arrangements,
+        "post_kind": st.session_state.get("post_kind", "all"),
         "first_access_only": bool(st.session_state.get("first_access_only", False)),
         "new_only": bool(st.session_state.get("new_only", False)),
         "date_mode": date_mode,
@@ -833,21 +855,15 @@ def _refresh_monitor(store: ListingsStore):
     _show_refresh_status(current)
 
 
-def build_property_type_options(rows: list[ListingRow]) -> list[str]:
-    types: set[str] = set()
-    for row in rows:
-        if row.listing_type:
-            types.add(row.listing_type)
-    return sorted(types)
-
-
 def filter_rows(
     rows: list[ListingRow],
     *,
     region_keys: set[str],
     borough_keys: set[BoroughKey],
     neighborhoods: set[str],
-    property_types: set[str],
+    space_types: set[str],
+    arrangements: set[str],
+    post_kind: str,
     first_access_only: bool,
     new_only: bool,
     new_urls: set[str],
@@ -879,7 +895,12 @@ def filter_rows(
             continue
         if neighborhoods and not (neighborhoods & _area_keys(row)):
             continue
-        if property_types and row.listing_type not in property_types:
+        category = classify_category(row.listing_type)
+        if space_types and category.space_type not in space_types:
+            continue
+        if arrangements and category.arrangement not in arrangements:
+            continue
+        if post_kind != "all" and category.post_kind != post_kind:
             continue
         if date_mode == "dates":
             if expanded_start is None or expanded_end is None:
@@ -1246,12 +1267,11 @@ st.session_state._new_urls = current_urls - st.session_state._seen_baseline
 refresh_completed = snapshot["cycle"] != st.session_state._store_cycle
 
 filters = st.session_state.filters
-property_type_options = sorted(set(build_property_type_options(all_rows)) | set(filters["property_types"]))
 if st.session_state.pop("_apply_filters_to_widgets", False):
     _sync_widget_keys_from_filters(filters)
 
 # Also hydrate list widgets when an already-open session reloads this UI update.
-for key in ("borough_keys", "neighborhoods", "property_types"):
+for key in ("borough_keys", "neighborhoods", "space_types"):
     st.session_state.setdefault(key, list(filters[key]))
 
 with st.sidebar, st.container(key="sidebar_filters"):
@@ -1287,10 +1307,31 @@ with st.sidebar, st.container(key="sidebar_filters"):
         placeholder="All neighborhoods / areas",
         format_func=lambda key: _area_label(key, regions),
     ))
-    selected_property_types = set(st.multiselect(
-        "Property type", property_type_options, key="property_types",
-        placeholder="All property types",
+    if st.session_state.pop("_category_migration_notice", False):
+        st.info("Your saved categories now use independent space and arrangement filters. "
+                "Every selected combination is included—for example, Apartment + House with "
+                "Rent + Sublet also includes houses for sublet.")
+    selected_post_kind = st.selectbox("Listings", list(POST_KINDS), key="post_kind",
+                                       format_func=POST_KINDS.get)
+    selected_space_types = set(st.multiselect(
+        "Space type", list(SPACE_TYPES), key="space_types", format_func=SPACE_TYPES.get,
+        placeholder="All space types",
     ))
+    eligible = [classify_category(row.listing_type) for row in region_rows
+                if not selected_neighborhoods or selected_neighborhoods & _area_keys(row)]
+    available_arrangements = {c.arrangement for c in eligible
+                              if (selected_post_kind == "all" or c.post_kind == selected_post_kind)
+                              and (not selected_space_types or c.space_type in selected_space_types)}
+    st.markdown("Arrangement")
+    st.caption("No boxes checked means all arrangements.")
+    for key, label in ARRANGEMENTS.items():
+        widget_key = f"arrangement_{key}"
+        st.session_state.setdefault(widget_key, key in filters["arrangements"])
+        if key in available_arrangements or st.session_state[widget_key]:
+            st.checkbox(label, key=widget_key)
+    if not available_arrangements and not any(st.session_state.get(f"arrangement_{k}") for k in ARRANGEMENTS):
+        st.caption("No arrangements available for these filters yet.")
+    selected_arrangements = {k for k in ARRANGEMENTS if st.session_state.get(f"arrangement_{k}", False)}
 
     st.subheader("Date availability")
     date_mode: DateFilterMode = st.radio(
@@ -1380,7 +1421,9 @@ filtered = filter_rows(
     region_keys=set(selected_regions),
     borough_keys=selected_borough_keys,
     neighborhoods=selected_neighborhoods,
-    property_types=selected_property_types,
+    space_types=selected_space_types,
+    arrangements=selected_arrangements,
+    post_kind=selected_post_kind,
     first_access_only=bool(st.session_state.get("first_access_only", False)),
     new_only=bool(st.session_state.get("new_only", False)),
     new_urls=st.session_state.get("_new_urls", set()),
@@ -1397,7 +1440,9 @@ filter_fp = json.dumps(
         "region_keys": sorted(selected_regions),
         "borough_keys": sorted(selected_borough_keys),
         "neighborhoods": sorted(selected_neighborhoods),
-        "property_types": sorted(selected_property_types),
+        "space_types": sorted(selected_space_types),
+        "arrangements": sorted(selected_arrangements),
+        "post_kind": selected_post_kind,
         "first_access_only": bool(st.session_state.get("first_access_only", False)),
         "new_only": bool(st.session_state.get("new_only", False)),
         "date_mode": date_mode,

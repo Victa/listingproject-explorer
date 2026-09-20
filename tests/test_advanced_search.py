@@ -130,11 +130,31 @@ class ParserTests(unittest.TestCase):
 
 class FilterTests(unittest.TestCase):
     def filter(self, rows, **kwargs):
-        args=dict(region_keys=set(),borough_keys=set(),neighborhoods=set(),property_types=set(),
+        args=dict(region_keys=set(),borough_keys=set(),neighborhoods=set(),space_types=set(), arrangements=set(), post_kind="all",
                   first_access_only=False,new_only=False,new_urls=set(),date_mode='none',dates_start=None,
                   dates_end=None,dates_tolerance_days=0,flexible_stay='week',flexible_months=[])
         args.update(kwargs)
         return UI.filter_rows(rows,**args)
+
+    def test_independent_category_combinations_and_unknown(self):
+        rows = [replace(listing(url=f'https://example.com/{i}'), listing_type=c)
+                for i, c in enumerate(['Apartments for Rent', 'Apartments for Sublet',
+                    'Houses for Rent', 'Houses for Sublet', 'Seeking Living Space', 'Prospect Heights'])]
+        self.assertEqual(self.filter(rows, space_types={'apartment', 'house'},
+                                     arrangements={'rent', 'sublet'}), rows[:4])
+        self.assertEqual(self.filter(rows, post_kind='wanted'), [rows[4]])
+        self.assertEqual(self.filter(rows, post_kind='available'), rows[:4])
+        self.assertEqual(self.filter(rows), rows)
+
+    def test_category_migration_is_idempotent(self):
+        old = {'property_types': ['Apartments for Rent', 'Apartments for Sublet', 'Houses for Rent']}
+        new = UI._validate_filters(old)
+        self.assertEqual(new['space_types'], ['apartment', 'house'])
+        self.assertEqual(new['arrangements'], ['rent', 'sublet'])
+        self.assertEqual(new['filter_version'], 2)
+        self.assertNotIn('property_types', new)
+        self.assertEqual(UI._validate_filters(new), new)
+        self.assertEqual(UI._default_filters()['post_kind'], 'all')
 
     def test_same_area_name_different_regions(self):
         rows=[listing(PARIS,area='Downtown'),listing(NYC,url='https://example.com/nyc',area='Downtown')]
@@ -273,6 +293,63 @@ class PageTests(unittest.TestCase):
 
     def tearDown(self): self.temp.cleanup()
 
+    def test_category_modes_dependencies_and_refresh_preserve_selection(self):
+        UI_STORE.state['rows'] = [replace(listing(url=f'https://example.com/{i}'), listing_type=c)
+            for i, c in enumerate(['Apartments for Rent', 'Art Studios for Share',
+                                    'Seeking Living Space', 'Prospect Heights'])]
+        app = self.app.run()
+        self.assertEqual(app.selectbox(key='post_kind').value, 'all')
+        app.selectbox(key='post_kind').set_value('wanted').run()
+        self.assertIn('1 listing', app.main.subheader[-1].value)
+        app.selectbox(key='post_kind').set_value('available').run()
+        self.assertIn('2 listings', app.main.subheader[-1].value)
+        app.multiselect(key='space_types').set_value(['art_studio']).run()
+        self.assertEqual([c.label for c in app.checkbox], ['Share'])
+        app.checkbox(key='arrangement_share').check().run()
+        app.multiselect(key='space_types').set_value(['apartment']).run()
+        self.assertTrue(app.checkbox(key='arrangement_share').value)
+        self.assertIn('0 listings', app.main.subheader[-1].value)
+        UI_STORE.state['rows'] = []
+        UI_STORE.state['revision'] += 1
+        app.run()
+        self.assertTrue(app.checkbox(key='arrangement_share').value)
+        saved = json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
+        self.assertEqual(saved['arrangements'], ['share'])
+        app.button[0].click().run()
+        self.assertEqual(app.selectbox(key='post_kind').value, 'all')
+        self.assertEqual(app.multiselect(key='space_types').value, [])
+        self.assertFalse(any(c.value for c in app.checkbox))
+
+    def test_category_change_resets_pagination(self):
+        UI_STORE.state['rows'] = [replace(listing(url=f'https://example.com/{i}'),
+            listing_type='Apartments for Rent' if i % 2 else 'Houses for Sublet') for i in range(40)]
+        app = self.app.run()
+        for action in ('space', 'arrangement', 'post'):
+            app.session_state['results_page'] = 2
+            app.run()
+            self.assertEqual(app.session_state['results_page'], 2)
+            if action == 'space':
+                app.multiselect(key='space_types').set_value(['apartment', 'house']).run()
+            elif action == 'arrangement':
+                app.checkbox(key='arrangement_rent').check().run()
+            else:
+                app.selectbox(key='post_kind').set_value('available').run()
+            self.assertEqual(app.session_state['results_page'], 1)
+
+    def test_category_migration_notice_once_and_reload(self):
+        path = Path(self.temp.name)/'.listings_filters.json'
+        path.write_text(json.dumps({'property_types': ['Apartments for Rent', 'Houses for Sublet']}))
+        app = self.app.run()
+        self.assertTrue(any('saved categories' in i.value for i in app.info))
+        app.run()
+        self.assertFalse(any('saved categories' in i.value for i in app.info))
+        app.session_state['_filters_initialized'] = False
+        app.run()
+        self.assertEqual(app.multiselect(key='space_types').value, ['apartment', 'house'])
+        self.assertTrue(app.checkbox(key='arrangement_rent').value)
+        self.assertTrue(app.checkbox(key='arrangement_sublet').value)
+        self.assertFalse(any('saved categories' in i.value for i in app.info))
+
     def test_cached_page_renders_during_refresh_and_region_filter_works(self):
         app=self.app.run()
         self.assertEqual(list(app.exception),[])
@@ -300,14 +377,16 @@ class PageTests(unittest.TestCase):
         app.multiselect(key='region_keys').set_value([NYC_REGION]).run()
         app.multiselect(key='borough_keys').set_value(['brooklyn']).run()
         app.multiselect(key='neighborhoods').set_value([NYC_REGION+'::Greenpoint']).run()
-        app.multiselect(key='property_types').set_value(['Apartments for Rent']).run()
+        app.multiselect(key='space_types').set_value(['apartment']).run()
+        app.checkbox(key='arrangement_rent').check().run()
         self.assertIn('1 listing',app.main.subheader[-1].value)
 
         saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
         self.assertEqual(saved['region_keys'],[NYC_REGION])
         self.assertEqual(saved['borough_keys'],['brooklyn'])
         self.assertEqual(saved['neighborhoods'],[NYC_REGION+'::Greenpoint'])
-        self.assertEqual(saved['property_types'],['Apartments for Rent'])
+        self.assertEqual(saved['space_types'],['apartment'])
+        self.assertEqual(saved['arrangements'],['rent'])
 
         app.multiselect(key='region_keys').set_value(['paris']).run()
         self.assertRaises(KeyError, lambda: app.multiselect(key='borough_keys'))
@@ -319,7 +398,7 @@ class PageTests(unittest.TestCase):
         app.button[0].click().run()
         self.assertEqual(app.multiselect(key='region_keys').value,[])
         self.assertEqual(app.multiselect(key='neighborhoods').value,[])
-        self.assertEqual(app.multiselect(key='property_types').value,[])
+        self.assertEqual(app.multiselect(key='space_types').value,[])
 
     def test_boolean_toggles_filter_restore_and_clear(self):
         first_url='https://example.com/first-access'
