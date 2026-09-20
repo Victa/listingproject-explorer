@@ -80,7 +80,12 @@ To regenerate the app icon from a square PNG:
 
 ## Verification
 
-Run `.venv/bin/python -m unittest discover -s tests -v` for parser, cache, migration, and UI behavior checks.
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+Covers parser and regional fetch behavior, cache/migration, filter logic, and Streamlit UI flows.
 
 ## License
 
