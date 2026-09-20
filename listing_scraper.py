@@ -1,4 +1,4 @@
-"""Fetch and parse Listings Project NYC index pages (server-side; no browser CORS)."""
+"""Fetch and parse Listings Project regional index pages (server-side; no browser CORS)."""
 
 from __future__ import annotations
 
@@ -7,26 +7,88 @@ import html as html_lib
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from html.parser import HTMLParser
 from datetime import date, datetime
 from typing import Callable, Literal
 from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-BASE_URL = "https://www.listingsproject.com/real-estate/new-york-city"
-FIRST_ACCESS_BASE = "https://www.listingsproject.com/real-estate/first-access/new-york-city"
-# All NYC real-estate categories. First access offers a shifting subset of these;
-# categories that aren't currently offered 302-redirect and are skipped per crawl
-# (see the ``is_redirect`` guard in ``fetch_all_listings``).
-FIRST_ACCESS_CATEGORIES: tuple[str, ...] = (
-    "rentals",
-    "studios",
-    "sublets",
-    "seeking_living",
-    "commercial",
-    "production",
-)
+from listing_categories import classify_category
+
+SITE_URL = "https://www.listingsproject.com"
+REGIONS_URL = f"{SITE_URL}/real-estate"
+FIRST_ACCESS_URL = f"{REGIONS_URL}/first-access"
+NYC_REGION = "new-york-city"
+
+
+@dataclass(frozen=True)
+class Region:
+    key: str
+    label: str
+    url: str
+
+
+class _Links(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+        self.href = None
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.href = dict(attrs).get("href")
+            self.parts = []
+
+    def handle_data(self, data):
+        if self.href is not None:
+            self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.href is not None:
+            self.links.append((self.href, " ".join(" ".join(self.parts).split())))
+            self.href = None
+
+
+def discover_regions(html: str, *, first_access: bool = False) -> list[Region]:
+    """Use source links and labels, including featured tiles and text-only regions."""
+    links = _Links()
+    links.feed(html)
+    prefix = "/real-estate/first-access/" if first_access else "/real-estate/"
+    regions = {}
+    for href, label in links.links:
+        parsed = urlparse(href)
+        if parsed.netloc and parsed.netloc != "www.listingsproject.com":
+            continue
+        path = parsed.path.rstrip("/")
+        if not path.startswith(prefix):
+            continue
+        key = path[len(prefix):]
+        if first_access and "/" in key:
+            parts = key.split("/")
+            if len(parts) != 2:
+                continue
+            key = parts[0]
+            label = key.replace("-", " ").title()
+            path = prefix + key
+        if not key or "/" in key or key == "first-access" or not label:
+            continue
+        regions[key] = Region(key, label, f"{SITE_URL}{path}")
+    return sorted(regions.values(), key=lambda region: region.label.casefold())
+
+
+def discover_category_urls(html: str, region: Region) -> list[str]:
+    links = _Links()
+    links.feed(html)
+    prefix = urlparse(region.url).path.rstrip("/") + "/"
+    return list(dict.fromkeys(
+        f"{SITE_URL}{urlparse(href).path}" for href, _ in links.links
+        if (not urlparse(href).netloc or urlparse(href).netloc == "www.listingsproject.com")
+        and urlparse(href).path.startswith(prefix)
+        and "/" not in urlparse(href).path[len(prefix):].strip("/")
+    ))
 
 CARD_SPLIT_RE = re.compile(
     r"""<div\s+class=["']flex flex-col md:flex-row[^"']*["']>""",
@@ -41,7 +103,7 @@ TITLE_LINK_RE = re.compile(
     re.DOTALL,
 )
 PRICE_RE = re.compile(
-    r"""(\$\s*[0-9][0-9,]*(?:/[A-Za-z]+)?)\s*</span>""",
+    r"""((?:(?:US|CA|AU|NZ)?\$|€|£|¥)\s*[0-9][0-9,.\s]*(?:/[A-Za-z]+)?)\s*</span>""",
     re.DOTALL,
 )
 DATE_FINDALL_RE = re.compile(r"([A-Za-z]+\s+\d{1,2},\s+\d{4})")
@@ -626,7 +688,7 @@ def fetch_listing_photo_urls(
     cookie: str | None = None,
 ) -> tuple[str, ...]:
     """GET a listing detail page and return gallery photo URLs (may be empty)."""
-    headers: dict[str, str] = {"User-Agent": "ListingProjectLocalTool/1.0"}
+    headers: dict[str, str] = {"User-Agent": "ListingProjectExplorer/2.0"}
     if cookie:
         headers["Cookie"] = cookie
     with httpx.Client(
@@ -654,11 +716,14 @@ class ListingRow:
     # HTTPS thumbnail from the index card (bunny.net CDN), if present
     photo_url: str | None
     availability: str
-    listing_start: datetime
-    listing_end: datetime
+    listing_start: datetime | None
+    listing_end: datetime | None
     price: str
     url: str
     is_first_access: bool = False
+    region_key: str = NYC_REGION
+    region_label: str = "New York City"
+    region_keys: tuple[str, ...] = ()
 
 
 def _parse_listing_date(s: str) -> datetime | None:
@@ -712,7 +777,7 @@ def _derive_borough_key(location_line: str) -> BoroughKey:
 
 
 def _parse_location_line(
-    raw_line: str,
+    raw_line: str, region_key: str = NYC_REGION,
 ) -> tuple[str, tuple[str, ...], str, str, BoroughKey]:
     """
     Parse a card location line into neighborhood_name, neighborhood_names,
@@ -723,10 +788,12 @@ def _parse_location_line(
     """
     normalized = _normalize_title(raw_line)
     parts = [p.strip() for p in normalized.split("|")]
-    first_segment = parts[0] if parts else normalized
-    listing_type = parts[1] if len(parts) > 1 else ""
+    category_segments = [p for p in parts if classify_category(p).post_kind != "unknown"]
+    listing_type = category_segments[-1] if category_segments else (parts[-1] if len(parts) > 1 else "")
+    location_segments = [p for p in parts if p not in category_segments] if category_segments else parts[:1]
+    first_segment = ", ".join(location_segments)
 
-    borough_key = _derive_borough_key(first_segment)
+    borough_key = _derive_borough_key(first_segment) if region_key == NYC_REGION else "all"
     if borough_key == "all":
         borough_label = ""
     else:
@@ -737,7 +804,10 @@ def _parse_location_line(
     else:
         neighborhood_name = first_segment.strip()
 
-    neighborhood_names = _canonicalize_neighborhoods(first_segment, borough_key)
+    neighborhood_names = (
+        _canonicalize_neighborhoods(first_segment, borough_key)
+        if region_key == NYC_REGION else (neighborhood_name,)
+    )
 
     return neighborhood_name, neighborhood_names, borough_label, listing_type, borough_key
 
@@ -780,17 +850,22 @@ def _row_from_parsed(row: dict, *, is_first_access: bool = False) -> ListingRow:
         listing_type=row["listing_type"],
         description=row["description"],
         photo_url=row["photo_url"],
-        availability=f"{row['start_date_str']} to {row['end_date_str']}",
+        availability=(f"{row['start_date_str']} to {row['end_date_str']}"
+                      if row["listing_start"] else "Availability not specified"),
         listing_start=row["listing_start"],
         listing_end=row["listing_end"],
         price=row["price"],
         url=row["url"],
         is_first_access=is_first_access,
+        region_key=row.get("region_key", NYC_REGION),
+        region_label=row.get("region_label", "New York City"),
+        region_keys=(row.get("region_key", NYC_REGION),),
     )
 
 
-def parse_listings_from_html(html: str, borough: BoroughKey = "all") -> list[dict]:
+def parse_listings_from_html(html: str, borough: BoroughKey = "all", *, region: Region | None = None) -> list[dict]:
     """Parse listing cards from one index page HTML. No dedupe."""
+    region = region or Region(NYC_REGION, "New York City", f"{REGIONS_URL}/{NYC_REGION}")
     out: list[dict] = []
     chunks = CARD_SPLIT_RE.split(html)
     for chunk in chunks[1:]:
@@ -810,14 +885,10 @@ def parse_listings_from_html(html: str, borough: BoroughKey = "all") -> list[dic
         pm = PRICE_RE.search(chunk)
         price = pm.group(1).strip() if pm else "N/A"
         date_strings = DATE_FINDALL_RE.findall(chunk)
-        if len(date_strings) < 1:
-            continue
-        start_s = date_strings[0]
-        end_s = date_strings[1] if len(date_strings) > 1 else start_s
+        start_s = date_strings[0] if date_strings else ""
+        end_s = date_strings[1] if len(date_strings) > 1 else ""
         start_dt = _parse_listing_date(start_s)
         end_dt = _parse_listing_date(end_s)
-        if start_dt is None or end_dt is None:
-            continue
         title = _normalize_title(title_raw)
         url = _absolute_url(href)
         (
@@ -826,9 +897,11 @@ def parse_listings_from_html(html: str, borough: BoroughKey = "all") -> list[dic
             borough_label,
             listing_type,
             borough_key,
-        ) = _parse_location_line(raw_location_line)
+        ) = _parse_location_line(raw_location_line, region.key)
         out.append(
             {
+                "region_key": region.key,
+                "region_label": region.label,
                 "listing_start": start_dt,
                 "listing_end": end_dt,
                 "start_date_str": start_s.strip(),
@@ -854,167 +927,142 @@ def discover_max_page(html: str) -> int:
     return max(nums) if nums else 1
 
 
+def request_page(client: httpx.Client, url: str, page: int = 1) -> httpx.Response:
+    """Retry transient failures only; never follow redirects into another region."""
+    for attempt in range(3):
+        try:
+            response = client.get(url, params={"page": page})
+            if response.status_code == 429 or response.status_code >= 500:
+                response.raise_for_status()
+            return response
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            if attempt == 2:
+                raise
+            time.sleep(0.5 * (2 ** attempt))
+    raise RuntimeError("Request did not complete")
+
+
 def fetch_page(client: httpx.Client, url: str, page: int = 1) -> str:
-    r = client.get(url, params={"page": page})
-    r.raise_for_status()
-    return r.text
+    response = request_page(client, url, page)
+    response.raise_for_status()
+    return response.text
 
 
-def _append_parsed_page(
-    html: str,
-    *,
-    is_first_access: bool,
-    seen_urls: set[str],
-    results: list[ListingRow],
-) -> None:
-    for row in parse_listings_from_html(html, "all"):
-        url = row["url"]
-        if url in seen_urls:
-            continue
-        seen_urls.add(url)
-        results.append(_row_from_parsed(row, is_first_access=is_first_access))
+def fetch_region_listings(
+    region: Region, *, client: httpx.Client, first_access: bool = False,
+    request_delay_s: float = 0.25,
+) -> list[ListingRow]:
+    """Return a complete region snapshot, or fail without publishing partial pages."""
+    first_html = fetch_page(client, region.url)
+    count_pattern = r"([\d,]+)\s+Listings?\b"
+    count = re.search(count_pattern, first_html, re.I)
+    indexes = [(region.url, first_html)]
+    # Some first-access regions offer categories rather than an aggregate index.
+    if first_access and count is None:
+        categories = discover_category_urls(first_html, region)
+        if not categories:
+            raise ValueError("First-access listings are unavailable; check membership/session")
+        indexes = []
+        for url in categories:
+            time.sleep(request_delay_s)
+            response = request_page(client, url)
+            if response.is_redirect:
+                continue
+            response.raise_for_status()
+            indexes.append((url, response.text))
+        if not indexes:
+            raise ValueError("No first-access categories could be loaded")
+
+    rows = []
+    for url, html in indexes:
+        expected = re.search(count_pattern, html, re.I)
+        if expected is None:
+            raise ValueError("Unrecognized listing index; previous results retained")
+        index_rows = []
+        for page in range(1, discover_max_page(html) + 1):
+            if page > 1:
+                time.sleep(request_delay_s)
+                html = fetch_page(client, url, page)
+            parsed = parse_listings_from_html(html, region=region)
+            if not parsed and int(expected.group(1).replace(",", "")) > 0:
+                raise ValueError("Listing cards could not be parsed; previous results retained")
+            index_rows.extend(_row_from_parsed(row, is_first_access=first_access) for row in parsed)
+        if len({row.url for row in index_rows}) < int(expected.group(1).replace(",", "")):
+            raise ValueError("Incomplete regional index; previous results retained")
+        rows.extend(index_rows)
+    return merge_listings(rows)
+
+
+def merge_listings(rows: list[ListingRow]) -> list[ListingRow]:
+    """Deduplicate URLs across regions and preserve first-access precedence."""
+    merged = {}
+    for row in rows:
+        previous = merged.get(row.url)
+        keys = set(row.region_keys or (row.region_key,))
+        if previous:
+            keys.update(previous.region_keys or (previous.region_key,))
+        preferred = previous if previous and previous.is_first_access else row
+        merged[row.url] = replace(preferred, region_keys=tuple(sorted(keys)))
+    return list(merged.values())
 
 
 def fetch_all_listings(
-    *,
-    request_delay_s: float = 0.25,
+    *, request_delay_s: float = 0.25,
     progress: Callable[[int, int], None] | None = None,
-    client: httpx.Client | None = None,
-    cookie: str | None = None,
+    client: httpx.Client | None = None, cookie: str | None = None,
 ) -> list[ListingRow]:
-    """Crawl NYC indexes (first-access when ``cookie`` is set, then public); dedupe by URL."""
+    """Fetch all discovered regions. The UI uses the resilient background store."""
     own_client = client is None
     if own_client:
-        headers: dict[str, str] = {"User-Agent": "ListingProjectLocalTool/1.0"}
-        if cookie:
-            headers["Cookie"] = cookie
-        client = httpx.Client(timeout=30.0, headers=headers)
-
-    # First-access before public so FA listings win URL dedupe and keep
-    # is_first_access=True when they also appear on the public index.
-    indexes: list[tuple[str, bool]] = []
-    if cookie:
-        for category in FIRST_ACCESS_CATEGORIES:
-            indexes.append((f"{FIRST_ACCESS_BASE}/{category}", True))
-    indexes.append((BASE_URL, False))
-
-    seen_urls: set[str] = set()
-    results: list[ListingRow] = []
-
+        client = httpx.Client(timeout=30, headers={
+            "User-Agent": "ListingProjectExplorer/2.0",
+            **({"Cookie": cookie} if cookie else {}),
+        })
     try:
-        # Discover page counts for every index first so progress is one continuous bar.
-        discovered: list[tuple[str, bool, str, int]] = []
-        for i, (base_url, is_first_access) in enumerate(indexes):
-            if i > 0 and request_delay_s > 0:
-                time.sleep(request_delay_s)
-            r = client.get(base_url, params={"page": 1})
-            # A first-access category that isn't offered redirects (302) back to the
-            # base first-access index; skip it instead of aborting the whole crawl.
-            if is_first_access and r.is_redirect:
-                continue
-            r.raise_for_status()
-            html = r.text
-            max_page = discover_max_page(html)
-            discovered.append((base_url, is_first_access, html, max_page))
-
-        total_pages = sum(max_page for _, _, _, max_page in discovered)
-        done = 0
-
-        for base_url, is_first_access, first_html, max_page in discovered:
-            html = first_html
-            for page_num in range(1, max_page + 1):
-                if page_num > 1:
-                    if request_delay_s > 0:
-                        time.sleep(request_delay_s)
-                    html = fetch_page(client, base_url, page=page_num)
-                _append_parsed_page(
-                    html,
-                    is_first_access=is_first_access,
-                    seen_urls=seen_urls,
-                    results=results,
-                )
-                done += 1
-                if progress:
-                    progress(done, total_pages)
+        sources = [(region, False) for region in discover_regions(fetch_page(client, REGIONS_URL))]
+        if not sources:
+            raise ValueError("No regions discovered")
+        if cookie:
+            sources.extend((region, True) for region in discover_regions(
+                fetch_page(client, FIRST_ACCESS_URL), first_access=True))
+        rows = []
+        for index, (region, first_access) in enumerate(sources):
+            rows.extend(fetch_region_listings(region, client=client, first_access=first_access,
+                                              request_delay_s=request_delay_s))
+            if progress:
+                progress(index + 1, len(sources))
+        return merge_listings(rows)
     finally:
         if own_client:
             client.close()
-
-    return results
 
 
 def search_listings(
-    mode: SearchMode,
-    borough: BoroughKey,
-    *,
-    on_or_after: date | None = None,
-    overlap_start: date | None = None,
-    overlap_end: date | None = None,
-    on_date: date | None = None,
-    request_delay_s: float = 0.25,
+    mode: SearchMode, borough: BoroughKey, *, on_or_after: date | None = None,
+    overlap_start: date | None = None, overlap_end: date | None = None,
+    on_date: date | None = None, request_delay_s: float = 0.25,
     progress: Callable[[int, int], None] | None = None,
     client: httpx.Client | None = None,
 ) -> list[ListingRow]:
-    """
-    Crawl all NYC index pages, parse, dedupe by URL, apply borough + date filters.
-
-    ``on_or_after`` is used when mode is ``on_or_after`` (listing start >= that date at local midnight).
-    ``overlap_start`` / ``overlap_end`` when mode is ``overlap`` (inclusive interval overlap).
-    ``on_date`` when mode is ``on_date`` (listing window covers that single date).
-    """
-    if mode == "on_or_after":
-        if on_or_after is None:
-            raise ValueError("on_or_after date is required for mode on_or_after")
-        cutoff = datetime.combine(on_or_after, datetime.min.time())
-    elif mode == "on_date":
-        if on_date is None:
-            raise ValueError("on_date is required for mode on_date")
-        target = datetime.combine(on_date, datetime.min.time())
-    else:
-        if overlap_start is None or overlap_end is None:
-            raise ValueError("overlap_start and overlap_end are required for mode overlap")
-        range_start = datetime.combine(overlap_start, datetime.min.time())
-        range_end = datetime.combine(overlap_end, datetime.min.time())
-
-    own_client = client is None
-    if own_client:
-        client = httpx.Client(timeout=30.0, headers={"User-Agent": "ListingProjectLocalTool/1.0"})
-
-    seen_urls: set[str] = set()
-    results: list[ListingRow] = []
-
-    try:
-        html = fetch_page(client, BASE_URL, page=1)
-        max_page = discover_max_page(html)
-        page_num = 1
-        while page_num <= max_page:
-            if progress:
-                progress(page_num, max_page)
-            for row in parse_listings_from_html(html, borough):
-                url = row["url"]
-                if url in seen_urls:
-                    continue
-                ls: datetime = row["listing_start"]
-                le: datetime = row["listing_end"]
-                if mode == "on_or_after":
-                    if ls < cutoff:
-                        continue
-                elif mode == "on_date":
-                    if ls > target or le < target:
-                        continue
-                else:
-                    if le < range_start or ls > range_end:
-                        continue
-                seen_urls.add(url)
-                results.append(_row_from_parsed(row))
-            page_num += 1
-            if page_num > max_page:
-                break
-            if request_delay_s > 0:
-                time.sleep(request_delay_s)
-            html = fetch_page(client, BASE_URL, page=page_num)
-    finally:
-        if own_client:
-            client.close()
-
+    """Compatibility helper; a borough selection explicitly restricts results to NYC."""
+    if mode == "on_or_after" and on_or_after is None:
+        raise ValueError("on_or_after is required")
+    if mode == "on_date" and on_date is None:
+        raise ValueError("on_date is required")
+    if mode == "overlap" and (overlap_start is None or overlap_end is None):
+        raise ValueError("overlap_start and overlap_end are required")
+    results = []
+    for row in fetch_all_listings(client=client, progress=progress, request_delay_s=request_delay_s):
+        if borough != "all" and (row.region_key != NYC_REGION or row.borough_key != borough):
+            continue
+        if row.listing_start is None or row.listing_end is None:
+            continue
+        start, end = row.listing_start.date(), row.listing_end.date()
+        if mode == "on_or_after" and start < on_or_after:
+            continue
+        if mode == "on_date" and not start <= on_date <= end:
+            continue
+        if mode == "overlap" and (end < overlap_start or start > overlap_end):
+            continue
+        results.append(row)
     return results

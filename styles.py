@@ -76,6 +76,8 @@ h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 
 /* —— Sidebar: frosted glass —— */
 section[data-testid="stSidebar"] {
+  width: min(324px, 85vw) !important;
+  min-width: min(324px, 85vw) !important;
   background: rgba(255, 255, 255, 0.72) !important;
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
@@ -90,6 +92,79 @@ section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 {
   letter-spacing: -0.015em;
+}
+
+/* Keep the refresh action in view while the filters and status scroll. */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+  flex-shrink: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {
+  height: 100%;
+  min-height: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has(.st-key-sidebar_filters) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has(.st-key-sidebar_footer) {
+  flex: 0 0 auto;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_filters {
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 1rem;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--lp-border);
+  background: var(--lp-surface);
+  padding: 1rem 0 max(1rem, env(safe-area-inset-bottom));
+  gap: 0.5rem !important;
+}
+
+/* The pinned refresh action is the sidebar's strong, monochrome CTA. */
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"] {
+  background: #000 !important;
+  border-color: #000 !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:hover:not(:disabled) {
+  background: #1d1d1f !important;
+  border-color: #1d1d1f !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:active:not(:disabled) {
+  background: #333336 !important;
+  border-color: #333336 !important;
+  transform: scale(0.99);
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:focus-visible {
+  outline: 3px solid rgba(0, 113, 227, 0.35) !important;
+  outline-offset: 2px;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer .st-key-refresh_listings button[kind="primary"]:disabled {
+  background: #8e8e93 !important;
+  border-color: #8e8e93 !important;
+  color: #fff !important;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer [data-testid="stCaptionContainer"] {
+  margin-top: 0.25rem;
+  text-align: center;
 }
 
 /* —— Results grid: continuous CSS grid (1 / 2 / 3 by breakpoint) —— */
@@ -474,6 +549,66 @@ div[data-testid="stCheckbox"] label {
   font-size: 0.95rem;
 }
 
+/* Keep long sidebar selections readable without hiding removal controls. */
+.st-key-sidebar_filters [data-baseweb="tag"] {
+  height: auto !important;
+  max-width: 100% !important;
+  flex-shrink: 1 !important;
+}
+.st-key-sidebar_filters [data-baseweb="tag"] span {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  overflow-wrap: anywhere;
+  max-width: none !important;
+}
+.st-key-sidebar_filters [data-baseweb="tag"] [role="button"] {
+  flex-shrink: 0 !important;
+}
+[role="option"], [role="option"] > div {
+  white-space: normal !important;
+  height: auto !important;
+  overflow-wrap: anywhere;
+}
+/* Checkbox menus keep the summary and long option names readable. */
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] {
+  background: var(--lp-surface-secondary, #f5f5f7);
+  border: 1px solid var(--lp-border);
+  border-radius: var(--lp-radius-control);
+  text-align: left;
+  justify-content: space-between;
+  height: auto;
+  min-height: 40px;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div {
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:first-child {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-start;
+  text-align: left;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:first-child > span {
+  width: 100%;
+  justify-content: flex-start !important;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] [data-testid="stMarkdownContainer"],
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] p {
+  width: 100%;
+  text-align: left !important;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:last-child {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] p,
+[data-testid="stPopoverBody"] [data-testid="stCheckbox"] p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 /* Multiselect tags as pills */
 span[data-baseweb="tag"] {
   border-radius: var(--lp-radius-pill) !important;
@@ -489,6 +624,31 @@ div[data-testid="stProgressBar"] > div > div {
 /* Info / warning / error boxes */
 div[data-testid="stAlert"] {
   border-radius: var(--lp-radius-control) !important;
+}
+/* Refresh feedback stays subtle and honors the system motion preference. */
+@keyframes lp-arrive {
+  from { opacity: .45; }
+  to { opacity: 1; }
+}
+@keyframes lp-new-highlight {
+  from { box-shadow: 0 0 0 3px rgba(13, 148, 136, .35); }
+  to { box-shadow: var(--lp-shadow); }
+}
+div[class*="st-key-seen_card_"] { animation: lp-arrive .24s ease-out; }
+div[class*="st-key-new_card_"] { animation: lp-arrive .24s ease-out, lp-new-highlight 1.6s ease-out; }
+.lp-loading-skeleton {
+  height: 220px;
+  border-radius: var(--lp-radius-card);
+  background: linear-gradient(100deg, #f5f5f7 30%, #eaecef 50%, #f5f5f7 70%);
+  background-size: 200% 100%;
+  animation: lp-skeleton 1.8s ease-in-out infinite;
+}
+@keyframes lp-skeleton { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  div[class*="st-key-new_card_"], div[class*="st-key-seen_card_"], .lp-loading-skeleton {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 </style>
 """

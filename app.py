@@ -1,5 +1,5 @@
 """
-Local Listings Project search UI. Fetches the NYC index from the server (no CORS).
+ListingProject Explorer: cached regional listings with background refresh.
 
 Run: streamlit run app.py
 """
@@ -11,7 +11,6 @@ import concurrent.futures
 import hashlib
 import html as html_lib
 import json
-import pickle
 import re
 from datetime import date, datetime, timedelta, timezone
 from io import StringIO
@@ -25,16 +24,17 @@ import streamlit.components.v1 as components
 from listing_scraper import (
     BoroughKey,
     ListingRow,
-    fetch_all_listings,
+    NYC_REGION,
     fetch_listing_photo_urls,
 )
+from listing_categories import (SPACE_TYPES, ARRANGEMENTS, POST_KINDS, classify_category, migrate_category_filters)
+from checked_select import checked_select
 from styles import inject_theme
+from listings_store import ListingsStore, access_key
 
 FILTERS_FILE = Path(__file__).parent / ".listings_filters.json"
 AUTH_FILE = Path(__file__).parent / ".listings_auth.json"
 SEEN_FILE = Path(__file__).parent / ".listings_seen.json"
-LISTINGS_CACHE_FILE = Path(__file__).parent / ".listings_cache.pkl"
-LISTINGS_CACHE_TTL = timedelta(hours=6)
 
 DateFilterMode = Literal["none", "dates", "flexible"]
 FlexibleStay = Literal["week", "month"]
@@ -61,9 +61,13 @@ GALLERY_PREFETCH_WORKERS = 6
 
 def _default_filters() -> dict[str, Any]:
     return {
+        "region_keys": [],
         "borough_keys": [],
         "neighborhoods": [],
-        "property_types": [],
+        "filter_version": 2,
+        "space_types": [],
+        "arrangements": [],
+        "post_kind": "all",
         "first_access_only": False,
         "new_only": False,
         "date_mode": "none",
@@ -74,27 +78,6 @@ def _default_filters() -> dict[str, Any]:
         "flexible_months": [],
     }
 
-
-def _borough_widget_key(borough_key: BoroughKey) -> str:
-    return f"borough_{borough_key}"
-
-
-def _hood_widget_key(name: str) -> str:
-    return f"hood_{name}"
-
-
-def _property_type_widget_key(name: str) -> str:
-    return f"ptype_{name}"
-
-
-def _filter_dropdown_label(group_name: str, selected: list[str]) -> str:
-    if not selected:
-        return group_name
-    if len(selected) == 1:
-        return selected[0]
-    if len(selected) <= 2:
-        return ", ".join(selected)
-    return f"{group_name} ({len(selected)})"
 
 def _parse_date(value: str | None) -> date | None:
     if not value:
@@ -204,6 +187,10 @@ def _format_card_date_range(start: datetime, end: datetime) -> str:
 
 def _format_card_dates_html(row: ListingRow) -> str:
     """Compact date range • stay length, with length in the trailing span."""
+    if row.listing_start is not None and row.listing_end is None:
+        return f"From {_format_short_date(row.listing_start)} · End date not specified"
+    if row.listing_start is None or row.listing_end is None:
+        return "Availability not specified"
     range_html = html_lib.escape(
         _format_card_date_range(row.listing_start, row.listing_end)
     )
@@ -316,12 +303,16 @@ def _migrate_legacy_date_mode(raw: dict[str, Any], defaults: dict[str, Any]) -> 
 
 
 def _validate_filters(raw: dict[str, Any]) -> dict[str, Any]:
+    raw = migrate_category_filters(raw)
     defaults = _default_filters()
     borough_keys = [
         k for k in raw.get("borough_keys", []) if k in ALL_BOROUGH_KEYS
     ]
-    neighborhoods = [n for n in raw.get("neighborhoods", []) if isinstance(n, str)]
-    property_types = [t for t in raw.get("property_types", []) if isinstance(t, str)]
+    regions = [r for r in raw.get("region_keys", [NYC_REGION]) if isinstance(r, str)]
+    neighborhoods = [n if "::" in n else f"{NYC_REGION}::{n}"
+                     for n in raw.get("neighborhoods", []) if isinstance(n, str)]
+    space_types = [t for t in raw.get("space_types", []) if t in SPACE_TYPES]
+    arrangements = [t for t in raw.get("arrangements", []) if t in ARRANGEMENTS]
     migrated = _migrate_legacy_date_mode(raw, defaults)
     date_mode = migrated["date_mode"]
     if date_mode not in VALID_DATE_MODES:
@@ -337,9 +328,13 @@ def _validate_filters(raw: dict[str, Any]) -> dict[str, Any]:
         m for m in migrated.get("flexible_months", []) if m in valid_month_keys
     ]
     return {
-        "borough_keys": borough_keys,
+        "region_keys": regions,
+        "borough_keys": borough_keys if regions == [NYC_REGION] else [],
         "neighborhoods": neighborhoods,
-        "property_types": property_types,
+        "filter_version": 2,
+        "space_types": space_types,
+        "arrangements": arrangements,
+        "post_kind": raw.get("post_kind") if raw.get("post_kind") in POST_KINDS else "all",
         "first_access_only": bool(raw.get("first_access_only", False)),
         "new_only": bool(raw.get("new_only", False)),
         "date_mode": date_mode,
@@ -356,6 +351,8 @@ def _load_persisted_filters() -> dict[str, Any] | None:
         return None
     try:
         raw = json.loads(FILTERS_FILE.read_text(encoding="utf-8"))
+        if raw.get("filter_version", 0) < 2 and raw.get("property_types"):
+            st.session_state._category_migration_notice = True
         return _validate_filters(raw)
     except (json.JSONDecodeError, TypeError, OSError):
         return None
@@ -372,6 +369,10 @@ def _clear_persisted_filters() -> None:
 
 def _init_filters() -> None:
     if st.session_state.get("_filters_initialized"):
+        if st.session_state.filters.get("filter_version", 0) < 2:
+            st.session_state._category_migration_notice = bool(st.session_state.filters.get("property_types"))
+            st.session_state.filters = _validate_filters(st.session_state.filters)
+            st.session_state._apply_filters_to_widgets = True
         return
 
     loaded = _load_persisted_filters()
@@ -380,20 +381,12 @@ def _init_filters() -> None:
     st.session_state._apply_filters_to_widgets = True
 
 
-def _sync_widget_keys_from_filters(
-    filters: dict[str, Any],
-    hood_options: list[str],
-    property_type_options: list[str],
-) -> None:
-    selected_boroughs = set(filters["borough_keys"])
-    selected_hoods = set(filters["neighborhoods"])
-    selected_property_types = set(filters.get("property_types", []))
-    for _, borough_key in BOROUGH_LABELS:
-        st.session_state[_borough_widget_key(borough_key)] = (
-            borough_key in selected_boroughs
-        )
-    for hood in hood_options:
-        st.session_state[_hood_widget_key(hood)] = hood in selected_hoods
+def _sync_widget_keys_from_filters(filters: dict[str, Any]) -> None:
+    for key in ("region_keys", "borough_keys", "neighborhoods", "space_types"):
+        st.session_state[key] = list(filters.get(key, []))
+    st.session_state["post_kind"] = filters["post_kind"]
+    for key in ARRANGEMENTS:
+        st.session_state[f"arrangement_{key}"] = key in filters["arrangements"]
     st.session_state["date_mode"] = filters["date_mode"]
     st.session_state["dates_start"] = (
         _parse_date(filters["dates_start"]) or DEFAULT_DATES_START
@@ -406,35 +399,22 @@ def _sync_widget_keys_from_filters(
     st.session_state["flexible_months"] = list(filters["flexible_months"])
     st.session_state["first_access_only"] = bool(filters.get("first_access_only", False))
     st.session_state["new_only"] = bool(filters.get("new_only", False))
-    for ptype in property_type_options:
-        st.session_state[_property_type_widget_key(ptype)] = (
-            ptype in selected_property_types
-        )
 
 
-def _collect_filters_from_widgets(
-    hood_options: list[str], property_type_options: list[str]
-) -> dict[str, Any]:
-    borough_keys = [
-        borough_key
-        for _, borough_key in BOROUGH_LABELS
-        if st.session_state.get(_borough_widget_key(borough_key), False)
-    ]
-    neighborhoods = [
-        hood
-        for hood in hood_options
-        if st.session_state.get(_hood_widget_key(hood), False)
-    ]
+def _collect_filters_from_widgets() -> dict[str, Any]:
+    borough_keys = list(st.session_state.get("borough_keys", []))
+    neighborhoods = list(st.session_state.get("neighborhoods", []))
+    space_types = list(st.session_state.get("space_types", []))
+    arrangements = [key for key in ARRANGEMENTS if st.session_state.get(f"arrangement_{key}", False)]
     date_mode: DateFilterMode = st.session_state.get("date_mode", "none")
-    property_types = [
-        ptype
-        for ptype in property_type_options
-        if st.session_state.get(_property_type_widget_key(ptype), False)
-    ]
     filters: dict[str, Any] = {
-        "borough_keys": borough_keys,
+        "region_keys": list(st.session_state.get("region_keys", [])),
+        "borough_keys": borough_keys if st.session_state.get("region_keys") == [NYC_REGION] else [],
         "neighborhoods": neighborhoods,
-        "property_types": property_types,
+        "filter_version": 2,
+        "space_types": space_types,
+        "arrangements": arrangements,
+        "post_kind": st.session_state.get("post_kind", "all"),
         "first_access_only": bool(st.session_state.get("first_access_only", False)),
         "new_only": bool(st.session_state.get("new_only", False)),
         "date_mode": date_mode,
@@ -477,43 +457,40 @@ def _large_photo_url(url: str | None) -> str | None:
     return bumped
 
 
-@st.cache_data(show_spinner=False)
-def load_listing_photos(url: str, cookie: str | None = None) -> tuple[str, ...]:
-    """Cached detail-page gallery URLs for a listing (empty if fetch/parse fails)."""
-    try:
-        return fetch_listing_photo_urls(url, cookie=cookie)
-    except Exception:
-        return ()
+@st.cache_resource
+def _photo_executor():
+    return concurrent.futures.ThreadPoolExecutor(max_workers=GALLERY_PREFETCH_WORKERS)
+
 
 
 def _gallery_session_key(url: str) -> str:
-    return f"_gallery_urls_{_card_key_id(url)}"
+    return f"_gallery_urls_{st.session_state.get('_access_key', '')}_{_card_key_id(url)}"
 
 
-def _prefetch_page_galleries(
-    rows: list[ListingRow],
-    cookie: str | None = None,
-) -> None:
-    """Fetch detail galleries for page rows missing from session (parallel, cached)."""
-    pending = [row for row in rows if _gallery_session_key(row.url) not in st.session_state]
-    if not pending:
-        return
+def _fetch_gallery(row: ListingRow, cookie: str | None) -> tuple[str, ...]:
+    try:
+        return fetch_listing_photo_urls(row.url, cookie=cookie) or ((row.photo_url,) if row.photo_url else ())
+    except Exception:
+        return (row.photo_url,) if row.photo_url else ()
 
-    def _fetch_one(row: ListingRow) -> tuple[str, tuple[str, ...]]:
-        fetched = load_listing_photos(row.url, cookie)
-        if fetched:
-            return row.url, fetched
-        fallback: tuple[str, ...] = (row.photo_url,) if row.photo_url else ()
-        return row.url, fallback
 
-    with st.spinner("Loading photos…"):
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=GALLERY_PREFETCH_WORKERS
-        ) as executor:
-            results = list(executor.map(_fetch_one, pending))
+def _prefetch_page_galleries(rows: list[ListingRow], cookie: str | None = None) -> None:
+    jobs = st.session_state.setdefault("_gallery_jobs", {})
+    for row in rows:
+        key = _gallery_session_key(row.url)
+        if key not in st.session_state and key not in jobs:
+            jobs[key] = _photo_executor().submit(_fetch_gallery, row, cookie)
 
-    for url, gallery in results:
-        st.session_state[_gallery_session_key(url)] = gallery
+
+def _collect_gallery_results() -> bool:
+    jobs = st.session_state.setdefault("_gallery_jobs", {})
+    changed = False
+    for key, future in list(jobs.items()):
+        if future.done():
+            st.session_state[key] = future.result()
+            del jobs[key]
+            changed = True
+    return changed
 
 
 def _render_photo_carousel(
@@ -801,112 +778,93 @@ def _save_seen_urls(urls: set[str]) -> None:
     )
 
 
-def _cookie_cache_key(cookie: str | None) -> str:
-    return hashlib.sha256((cookie or "").encode("utf-8")).hexdigest()[:16]
+@st.cache_resource
+def _listings_store(cookie: str | None) -> ListingsStore:
+    return ListingsStore(Path(__file__).parent, cookie)
 
 
-def _read_listings_disk_cache(cookie: str | None) -> list[ListingRow] | None:
-    if not LISTINGS_CACHE_FILE.exists():
-        return None
-    try:
-        with LISTINGS_CACHE_FILE.open("rb") as f:
-            payload = pickle.load(f)
-    except (OSError, pickle.UnpicklingError, TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    fetched_at = payload.get("fetched_at")
-    rows = payload.get("rows")
-    if not isinstance(fetched_at, datetime) or not isinstance(rows, list):
-        return None
-    if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-    if payload.get("cookie_key") != _cookie_cache_key(cookie):
-        return None
-    if datetime.now(timezone.utc) - fetched_at > LISTINGS_CACHE_TTL:
-        return None
-    return rows
+
+def _area_keys(row: ListingRow) -> set[str]:
+    return {f"{region}::{name}" for region in (row.region_keys or (row.region_key,))
+            for name in row.neighborhood_names}
 
 
-def _write_listings_disk_cache(rows: list[ListingRow], cookie: str | None) -> None:
-    payload = {
-        "fetched_at": datetime.now(timezone.utc),
-        "cookie_key": _cookie_cache_key(cookie),
-        "rows": rows,
-    }
-    LISTINGS_CACHE_FILE.write_bytes(pickle.dumps(payload))
+def _area_label(key: str, regions: dict) -> str:
+    region, name = key.split("::", 1)
+    label = regions[region].label if region in regions else region.replace("-", " ").title()
+    return f"{name} · {label}"
 
 
-def _clear_listings_disk_cache() -> None:
-    if LISTINGS_CACHE_FILE.exists():
-        LISTINGS_CACHE_FILE.unlink()
+def _areas_changed():
+    st.session_state["neighborhoods"] = []
+    st.session_state.filters["neighborhoods"] = []
 
 
-def _listing_urls_fingerprint(rows: list[ListingRow]) -> frozenset[str]:
-    return frozenset(row.url for row in rows)
+def _region_changed():
+    regions = st.session_state.get("region_keys", [])
+    _areas_changed()
+    if regions != [NYC_REGION]:
+        st.session_state["borough_keys"] = []
+        st.session_state.filters["borough_keys"] = []
+    st.session_state.filters["region_keys"] = list(regions)
 
 
-@st.cache_data(show_spinner=False, ttl=LISTINGS_CACHE_TTL)
-def load_listings(cookie: str | None = None) -> list[ListingRow]:
-    cached = _read_listings_disk_cache(cookie)
-    if cached is not None:
-        return cached
-
-    progress_ph = st.empty()
-
-    def on_progress(page: int, total: int) -> None:
-        progress_ph.progress(
-            page / max(total, 1),
-            text=f"Fetching listings — page {page} of {total}…",
+def _refresh_error_message(source: str, message: str, regions: dict) -> str:
+    if source == "first" and message == "No first-access regions available; check membership/session":
+        return (
+            "First-access listings could not be checked: Listings Project returned no "
+            "first-access regions. Your saved sign-in may have expired, or your membership "
+            "may not include first access. Check your membership and reconnect your "
+            "Listings Project session, then select Refresh listings. "
+            "Public listings can still update; any saved first-access results remain visible."
         )
-
-    try:
-        rows = fetch_all_listings(progress=on_progress, cookie=cookie)
-    finally:
-        progress_ph.empty()
-
-    _write_listings_disk_cache(rows, cookie)
-    return rows
-
-
-def build_neighborhood_map(rows: list[ListingRow]) -> dict[BoroughKey, list[str]]:
-    buckets: dict[BoroughKey, set[str]] = {}
-    for row in rows:
-        if row.borough_key == "all":
-            continue
-        buckets.setdefault(row.borough_key, set()).update(row.neighborhood_names)
-    return {key: sorted(names) for key, names in buckets.items()}
+    if ":" in source:
+        kind, key = source.split(":", 1)
+        label = regions[key].label if key in regions else key.replace("-", " ").title()
+        scope = f"{label} ({'first access' if kind == 'first' else 'public listings'})"
+        message = message.removeprefix(f"{label}: ")
+    else:
+        scope = {"first": "First-access region lookup", "public": "Public region lookup"}.get(source, "Listings refresh")
+    return (f"{scope} could not be refreshed. Reason: {message}. "
+            "Saved results for this source remain visible, but may be out of date. "
+            "Select Refresh listings to try again.")
 
 
-def build_property_type_options(rows: list[ListingRow]) -> list[str]:
-    types: set[str] = set()
-    for row in rows:
-        if row.listing_type:
-            types.add(row.listing_type)
-    return sorted(types)
+def _show_refresh_status(snapshot: dict):
+    if snapshot["refreshing"]:
+        total = snapshot["total"]
+        text = (f"Checking for updates · {snapshot['completed']} of {total} regional indexes"
+                if total else "Discovering regions…")
+        st.caption(text)
+    elif snapshot["updated_at"]:
+        updated = datetime.fromtimestamp(snapshot["updated_at"]).strftime("%b %d, %I:%M %p")
+        st.caption(f"Cached results · last updated {updated}")
 
 
-def neighborhood_options_for_boroughs(
-    borough_keys: set[BoroughKey],
-    neighborhood_map: dict[BoroughKey, list[str]],
-) -> list[str]:
-    if not borough_keys:
-        all_names: set[str] = set()
-        for names in neighborhood_map.values():
-            all_names.update(names)
-        return sorted(all_names)
-    all_names: set[str] = set()
-    for key in borough_keys:
-        all_names.update(neighborhood_map.get(key, []))
-    return sorted(all_names)
+def _show_refresh_errors(snapshot: dict):
+    for source, message in snapshot["errors"].items():
+        st.warning(_refresh_error_message(source, message, snapshot["regions"]))
+
+
+@st.fragment(run_every=1)
+def _refresh_monitor(store: ListingsStore):
+    store.start()
+    current = store.snapshot()
+    gallery_changed = _collect_gallery_results()
+    if current["revision"] != st.session_state.get("_store_revision") or gallery_changed:
+        st.rerun()
+    _show_refresh_status(current)
 
 
 def filter_rows(
     rows: list[ListingRow],
     *,
+    region_keys: set[str],
     borough_keys: set[BoroughKey],
     neighborhoods: set[str],
-    property_types: set[str],
+    space_types: set[str],
+    arrangements: set[str],
+    post_kind: str,
     first_access_only: bool,
     new_only: bool,
     new_urls: set[str],
@@ -926,15 +884,24 @@ def filter_rows(
         )
 
     for row in rows:
+        if region_keys and not region_keys.intersection(row.region_keys or (row.region_key,)):
+            continue
+        if date_mode != "none" and (row.listing_start is None or row.listing_end is None):
+            continue
         if first_access_only and not row.is_first_access:
             continue
         if new_only and row.url not in new_urls:
             continue
         if borough_keys and row.borough_key not in borough_keys:
             continue
-        if neighborhoods and not (neighborhoods & set(row.neighborhood_names)):
+        if neighborhoods and not (neighborhoods & _area_keys(row)):
             continue
-        if property_types and row.listing_type not in property_types:
+        category = classify_category(row.listing_type)
+        if space_types and category.space_type not in space_types:
+            continue
+        if arrangements and category.arrangement not in arrangements:
+            continue
+        if post_kind != "all" and category.post_kind != post_kind:
             continue
         if date_mode == "dates":
             if expanded_start is None or expanded_end is None:
@@ -1075,7 +1042,7 @@ _PRICE_RE = re.compile(
 def _normalize_price_period(suffix: str) -> str:
     """Map scraped price suffix to a canonical period label."""
     s = (suffix or "").lower()
-    if s in ("", "mo", "month", "monthly"):
+    if s in ("mo", "month", "monthly"):
         return "monthly"
     if s in ("wk", "week", "weekly"):
         return "weekly"
@@ -1108,6 +1075,8 @@ def _listing_stay_days(start: datetime, end: datetime) -> int:
 
 def _display_price_for_row(row: ListingRow) -> str:
     """Price string for cards; convert daily/nightly/weekly to monthly when stay > 30 days."""
+    if row.listing_start is None or row.listing_end is None:
+        return row.price
     parsed = _parse_price(row.price)
     if parsed is None:
         return row.price
@@ -1225,7 +1194,14 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
             if row.borough_label
             else hood_label
         )
-        location_esc = html_lib.escape(location)
+        if row.region_key != NYC_REGION:
+            location = row.neighborhood
+        region_labels = [st.session_state.get("_region_labels", {}).get(key, row.region_label)
+                         for key in (row.region_keys or (row.region_key,))]
+        extra_regions = [label for label in region_labels
+                         if location.casefold() != label.casefold()
+                         and not location.casefold().endswith(", " + label.casefold())]
+        location_esc = html_lib.escape(" · ".join([location] + extra_regions))
         dates_html = _format_card_dates_html(row)
         price_html = _format_price_html(_display_price_for_row(row))
         type_html = ""
@@ -1253,134 +1229,110 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
         )
 
 
-st.set_page_config(page_title="Listings Project search", layout="wide")
+st.set_page_config(page_title="ListingProject Explorer", layout="wide")
 inject_theme()
-st.title("Listings Project — NYC search")
-st.caption(
-    "Browse the NYC index with borough, neighborhood, property type, and availability filters."
-)
-
+st.title("ListingProject Explorer")
+st.caption("Find your next place across every Listings Project region.")
 _init_filters()
-
 auth_cookie = _load_auth_cookie()
+context_key = access_key(auth_cookie)
+if st.session_state.get("_access_key") != context_key:
+    for key in ("_known_urls", "_new_urls", "_seen_baseline", "_pending_added", "_store_cycle", "_notify_refresh", "_listing_order"):
+        st.session_state.pop(key, None)
+    st.session_state._access_key = context_key
 
-# Clear cache and continue this run (no early rerun) so filter widgets still
-# render and Streamlit does not wipe their session_state keys.
-if st.sidebar.button("Refresh listings"):
-    load_listings.clear()
-    _clear_listings_disk_cache()
-    st.session_state.pop("_seen_initialized", None)
-    st.session_state._apply_filters_to_widgets = True
+store = _listings_store(auth_cookie)
+store.start()
+snapshot = store.snapshot()
+st.session_state._store_revision = snapshot["revision"]
+all_rows = snapshot["rows"]
+# Append newly arrived cards without shifting the page the user is reading.
+listing_order = st.session_state.setdefault("_listing_order", {})
+for row in all_rows:
+    if row.url not in listing_order:
+        listing_order[row.url] = len(listing_order)
+all_rows.sort(key=lambda row: listing_order[row.url])
+regions = snapshot["regions"]
+st.session_state._region_labels = {key: region.label for key, region in regions.items()}
+current_urls = {row.url for row in all_rows}
+if "_known_urls" not in st.session_state:
+    st.session_state._seen_baseline = _load_seen_urls()
+    st.session_state._known_urls = current_urls
+    st.session_state._pending_added = set()
+    st.session_state._notify_refresh = bool(current_urls)
+    st.session_state._store_cycle = snapshot["cycle"]
+else:
+    st.session_state._pending_added.update(current_urls - st.session_state._known_urls)
+    st.session_state._known_urls = current_urls
+st.session_state._new_urls = current_urls - st.session_state._seen_baseline
+refresh_completed = snapshot["cycle"] != st.session_state._store_cycle
 
-try:
-    with st.spinner("Loading listings from listingsproject.com…"):
-        all_rows = load_listings(cookie=auth_cookie)
-except Exception as e:
-    st.error(f"Request failed: {e}")
-    st.stop()
-
-listing_fp = _listing_urls_fingerprint(all_rows)
-if (
-    not st.session_state.get("_seen_initialized")
-    or st.session_state.get("_listing_urls_fp") != listing_fp
-):
-    seen = _load_seen_urls()
-    current = set(listing_fp)
-    st.session_state._new_urls = current - seen
-    _save_seen_urls(seen | current)
-    st.session_state._listing_urls_fp = listing_fp
-    st.session_state._seen_initialized = True
-
-if auth_cookie and not any(r.is_first_access for r in all_rows):
-    st.sidebar.warning(
-        "First-access session expired — update `.listings_auth.json` with a fresh cookie."
-    )
-neighborhood_map = build_neighborhood_map(all_rows)
-property_type_options = build_property_type_options(all_rows)
 filters = st.session_state.filters
-
 if st.session_state.pop("_apply_filters_to_widgets", False):
-    hood_for_sync = neighborhood_options_for_boroughs(
-        set(filters["borough_keys"]), neighborhood_map
-    )
-    _sync_widget_keys_from_filters(filters, hood_for_sync, property_type_options)
+    _sync_widget_keys_from_filters(filters)
 
-with st.sidebar:
+# Also hydrate list widgets when an already-open session reloads this UI update.
+for key in ("borough_keys", "neighborhoods", "space_types"):
+    st.session_state.setdefault(key, list(filters[key]))
+
+with st.sidebar, st.container(key="sidebar_filters"):
     st.header("Filters")
-
-    st.checkbox("First access only", key="first_access_only")
-    st.checkbox("New only", key="new_only")
-
-    selected_borough_labels = [
-        label
-        for label, borough_key in BOROUGH_LABELS
-        if st.session_state.get(_borough_widget_key(borough_key), False)
-    ]
-    with st.popover(
-        _filter_dropdown_label("Borough", selected_borough_labels),
-        use_container_width=True,
-    ):
-        for label, borough_key in BOROUGH_LABELS:
-            st.checkbox(label, key=_borough_widget_key(borough_key))
-
-    selected_borough_keys = {
-        borough_key
-        for _, borough_key in BOROUGH_LABELS
-        if st.session_state.get(_borough_widget_key(borough_key), False)
-    }
-    hood_options = neighborhood_options_for_boroughs(
-        selected_borough_keys, neighborhood_map
+    st.toggle("First access only", key="first_access_only", width="stretch")
+    st.toggle("New only", key="new_only", width="stretch")
+    region_options = sorted(set(regions) | set(st.session_state.get("region_keys", [])),
+                            key=lambda key: regions[key].label if key in regions else key)
+    selected_regions = checked_select(
+        "Region", region_options, key="region_keys", placeholder="All regions",
+        format_func=lambda key: regions[key].label if key in regions else key.replace("-", " ").title(),
+        on_change=_region_changed,
     )
-
-    selected_hood_labels = [
-        hood
-        for hood in hood_options
-        if st.session_state.get(_hood_widget_key(hood), False)
-    ]
-    with st.popover(
-        _filter_dropdown_label("Neighborhood", selected_hood_labels),
-        use_container_width=True,
-    ):
-        hood_col1, hood_col2 = st.columns(2)
-        with hood_col1:
-            if st.button("Select all", key="hood_select_all"):
-                for hood in hood_options:
-                    st.session_state[_hood_widget_key(hood)] = True
-                st.rerun()
-        with hood_col2:
-            if st.button("Clear", key="hood_clear"):
-                for hood in hood_options:
-                    st.session_state[_hood_widget_key(hood)] = False
-                st.rerun()
-
-        with st.container(height=300):
-            for hood in hood_options:
-                st.checkbox(hood, key=_hood_widget_key(hood))
-
-    selected_property_type_labels = [
-        ptype
-        for ptype in property_type_options
-        if st.session_state.get(_property_type_widget_key(ptype), False)
-    ]
-    with st.popover(
-        _filter_dropdown_label("Property type", selected_property_type_labels),
-        use_container_width=True,
-    ):
-        ptype_col1, ptype_col2 = st.columns(2)
-        with ptype_col1:
-            if st.button("Select all", key="ptype_select_all"):
-                for ptype in property_type_options:
-                    st.session_state[_property_type_widget_key(ptype)] = True
-                st.rerun()
-        with ptype_col2:
-            if st.button("Clear", key="ptype_clear"):
-                for ptype in property_type_options:
-                    st.session_state[_property_type_widget_key(ptype)] = False
-                st.rerun()
-
-        with st.container(height=300):
-            for ptype in property_type_options:
-                st.checkbox(ptype, key=_property_type_widget_key(ptype))
+    selected_borough_keys = set()
+    if selected_regions == [NYC_REGION]:
+        borough_labels = {key: label for label, key in BOROUGH_LABELS}
+        selected_borough_keys = set(checked_select(
+            "Borough", list(borough_labels), key="borough_keys",
+            placeholder="All boroughs", format_func=borough_labels.get,
+            on_change=_areas_changed,
+        ))
+    region_rows = [row for row in all_rows
+                   if (not selected_regions or set(selected_regions).intersection(row.region_keys or (row.region_key,)))
+                   and (not selected_borough_keys or row.borough_key in selected_borough_keys)]
+    hood_options = sorted(set().union(*(_area_keys(row) for row in region_rows)))
+    # Retain saved areas while their region is still loading or unavailable.
+    hood_options = sorted(set(hood_options) | {
+        key for key in filters["neighborhoods"]
+        if (not selected_regions or key.split("::", 1)[0] in selected_regions)
+    })
+    selected_neighborhoods = set(checked_select(
+        "Neighborhood / Area", hood_options, key="neighborhoods",
+        placeholder="All neighborhoods / areas",
+        format_func=lambda key: _area_label(key, regions),
+    ))
+    if st.session_state.pop("_category_migration_notice", False):
+        st.info("Your saved categories now use independent space and arrangement filters. "
+                "Every selected combination is included—for example, Apartment + House with "
+                "Rent + Sublet also includes houses for sublet.")
+    selected_post_kind = st.selectbox("Listings", list(POST_KINDS), key="post_kind",
+                                       format_func=POST_KINDS.get)
+    selected_space_types = set(checked_select(
+        "Space type", list(SPACE_TYPES), key="space_types", format_func=SPACE_TYPES.get,
+        placeholder="All space types",
+    ))
+    eligible = [classify_category(row.listing_type) for row in region_rows
+                if not selected_neighborhoods or selected_neighborhoods & _area_keys(row)]
+    available_arrangements = {c.arrangement for c in eligible
+                              if (selected_post_kind == "all" or c.post_kind == selected_post_kind)
+                              and (not selected_space_types or c.space_type in selected_space_types)}
+    st.markdown("Arrangement")
+    st.caption("No boxes checked means all arrangements.")
+    for key, label in ARRANGEMENTS.items():
+        widget_key = f"arrangement_{key}"
+        st.session_state.setdefault(widget_key, key in filters["arrangements"])
+        if key in available_arrangements or st.session_state[widget_key]:
+            st.checkbox(label, key=widget_key)
+    if not available_arrangements and not any(st.session_state.get(f"arrangement_{k}") for k in ARRANGEMENTS):
+        st.caption("No arrangements available for these filters yet.")
+    selected_arrangements = {k for k in ARRANGEMENTS if st.session_state.get(f"arrangement_{k}", False)}
 
     st.subheader("Date availability")
     date_mode: DateFilterMode = st.radio(
@@ -1439,7 +1391,7 @@ with st.sidebar:
         )
         month_options = _flexible_month_options()
         month_labels = {key: label for label, key in month_options}
-        flexible_months = st.multiselect(
+        flexible_months = checked_select(
             "Go anytime",
             options=[key for _, key in month_options],
             format_func=lambda key: month_labels.get(key, key),
@@ -1448,9 +1400,7 @@ with st.sidebar:
         if not flexible_months:
             st.caption("Select one or more months to filter by availability.")
 
-    st.session_state.filters = _collect_filters_from_widgets(
-        hood_options, property_type_options
-    )
+    st.session_state.filters = _collect_filters_from_widgets()
     _save_persisted_filters(st.session_state.filters)
 
     if st.button("Clear filters", use_container_width=True):
@@ -1460,27 +1410,21 @@ with st.sidebar:
         st.session_state._apply_filters_to_widgets = True
         st.rerun()
 
-selected_borough_keys = {
-    borough_key
-    for _, borough_key in BOROUGH_LABELS
-    if st.session_state.get(_borough_widget_key(borough_key), False)
-}
-selected_neighborhoods = {
-    hood
-    for hood in hood_options
-    if st.session_state.get(_hood_widget_key(hood), False)
-}
-selected_property_types = {
-    ptype
-    for ptype in property_type_options
-    if st.session_state.get(_property_type_widget_key(ptype), False)
-}
+with st.sidebar, st.container(key="sidebar_footer"):
+    _refresh_monitor(store)
+    st.button("Refresh listings", key="refresh_listings", use_container_width=True,
+              type="primary", on_click=store.start, kwargs={"force": True})
+
+_show_refresh_errors(snapshot)
 
 filtered = filter_rows(
     all_rows,
+    region_keys=set(selected_regions),
     borough_keys=selected_borough_keys,
     neighborhoods=selected_neighborhoods,
-    property_types=selected_property_types,
+    space_types=selected_space_types,
+    arrangements=selected_arrangements,
+    post_kind=selected_post_kind,
     first_access_only=bool(st.session_state.get("first_access_only", False)),
     new_only=bool(st.session_state.get("new_only", False)),
     new_urls=st.session_state.get("_new_urls", set()),
@@ -1494,9 +1438,12 @@ filtered = filter_rows(
 
 filter_fp = json.dumps(
     {
+        "region_keys": sorted(selected_regions),
         "borough_keys": sorted(selected_borough_keys),
         "neighborhoods": sorted(selected_neighborhoods),
-        "property_types": sorted(selected_property_types),
+        "space_types": sorted(selected_space_types),
+        "arrangements": sorted(selected_arrangements),
+        "post_kind": selected_post_kind,
         "first_access_only": bool(st.session_state.get("first_access_only", False)),
         "new_only": bool(st.session_state.get("new_only", False)),
         "date_mode": date_mode,
@@ -1532,8 +1479,20 @@ st.subheader(subheader)
 if st.session_state.pop("_scroll_results_top", False):
     _scroll_main_to_top()
 
+if refresh_completed:
+    st.session_state._store_cycle = snapshot["cycle"]
+    additions = st.session_state._pending_added & {row.url for row in filtered}
+    if additions and st.session_state._notify_refresh:
+        st.toast(f"{len(additions)} new listing{'s' if len(additions) != 1 else ''} match your search.", icon="✨")
+    st.session_state._pending_added = set()
+    st.session_state._notify_refresh = True
+
 if not filtered:
-    st.info("No listings match these filters.")
+    if snapshot["refreshing"]:
+        st.info("Loading regions in the background. Results will appear here as they arrive.")
+        st.html('<div class="lp-loading-skeleton" aria-label="Loading listings"></div>')
+    else:
+        st.info("No listings match these filters.")
 else:
     _prefetch_page_galleries(page_rows, auth_cookie)
     with st.container(key="listings_grid"):
@@ -1554,8 +1513,9 @@ else:
                 "canonical_neighborhoods": "; ".join(r.neighborhood_names),
                 "borough": r.borough_label,
                 "type": r.listing_type,
-                "available_from": r.listing_start.date(),
-                "available_to": r.listing_end.date(),
+                "region": "; ".join(regions[key].label if key in regions else key for key in (r.region_keys or (r.region_key,))),
+                "available_from": r.listing_start.date() if r.listing_start else None,
+                "available_to": r.listing_end.date() if r.listing_end else None,
                 "price": r.price,
                 "description": r.description,
                 "url": r.url,
@@ -1568,6 +1528,12 @@ else:
     st.download_button(
         "Download CSV",
         data=buf.getvalue(),
-        file_name="listings_results.csv",
+        file_name="listingproject_explorer.csv",
         mime="text/csv",
     )
+
+    # Only visible cards count as seen; background arrivals remain new.
+    visible_urls = {row.url for row in page_rows}
+    if not visible_urls.issubset(st.session_state.get("_saved_visible_urls", set())):
+        _save_seen_urls(_load_seen_urls() | visible_urls)
+        st.session_state.setdefault("_saved_visible_urls", set()).update(visible_urls)

@@ -1,42 +1,47 @@
 ---
-description: Listings Project NYC Streamlit app — architecture, data model, conventions
+description: ListingProject Explorer regional Streamlit app — architecture, data model, conventions
 alwaysApply: true
 ---
 
-# Listings Project
+# ListingProject Explorer
 
-Personal Streamlit app for searching NYC listings on listingsproject.com. **App-only** — no CLI/bash scripts.
+Personal Streamlit app for searching all available real-estate regions on listingsproject.com. Repository: https://github.com/Victa/listingproject-explorer. The macOS launcher starts the Streamlit app.
 
 ## Files
 
 - `app.py` — Streamlit UI: filters, card grid, CSV export
-- `listing_scraper.py` — fetches and parses the live NYC index HTML
+- `listing_scraper.py` — discovers regions and parses regional index HTML
+- `listings_store.py` — background workers, versioned regional caches, refresh progress
 
 Run: `streamlit run app.py`
 
 ## Architecture
 
-1. `fetch_all_listings()` crawls all index pages once
-2. `@st.cache_data` in `app.py` caches the full crawl; **Refresh listings** clears cache
-3. Borough, neighborhood, and date filters run **in memory** on cached rows — no re-crawl on filter change
+1. `ListingsStore` discovers regions from the source directory and refreshes their indexes with bounded background workers
+2. Versioned JSON snapshots are scoped by access context. **Refresh listings** preserves visible cached results while fresh snapshots arrive; failed regions retain previous data
+3. Region, borough, area, property-type, and date filters run **in memory** — no re-crawl on filter change
+4. Streamlit polls refresh progress; worker threads never call Streamlit APIs
 
 ## Data model (`ListingRow`)
 
-Parsed from each index card on `https://www.listingsproject.com/real-estate/new-york-city`:
+Parsed from region indexes discovered at `https://www.listingsproject.com/real-estate`:
 
 | Field | Source |
 |-------|--------|
+| `region_key` / `region_label` / `region_keys` | Source region identifiers and labels; URL deduplication preserves region associations |
 | `neighborhood_name` | Text before borough in location line (raw, as published) |
 | `neighborhood_names` | Canonical name(s) from alias map + fuzzy match; multi-hood listings map to all matches |
 | `borough_label` / `borough_key` | Derived from location line |
 | `listing_type` | Segment after first `\|` (e.g. "Apartments for Sublet") |
 | `description` | `<p class="text-sm leading-normal mb-4">` on card |
-| `listing_start` / `listing_end` | Availability dates on card |
+| `listing_start` / `listing_end` | Availability dates on card; missing dates remain unknown |
 | `photo_url`, `title`, `price`, `url` | Standard card fields |
 
 Location line format: `Neighborhood, Borough | Type | optional tags`
 
 ## Borough rules
+
+Apply these rules only to the NYC region. Other regions preserve published location names. Area filter keys include the region to distinguish identical names. Show borough controls only for an NYC-only search.
 
 - Brooklyn/Queens/Bronx/Staten Island: match borough name in location line
 - **Manhattan**: `, New York` with no other borough token (best-effort heuristic)
@@ -44,7 +49,7 @@ Location line format: `Neighborhood, Borough | Type | optional tags`
 
 ## Date filters (app.py)
 
-- **Any dates** (default): no date filter
+- **Any dates** (default): no date filter, including listings with unspecified dates; date-specific filters require known start and end dates
 - **Dates** (check-in / check-out): listing must cover the full window — `listing_start <= check_in` and `listing_end >= check_out`; tolerance expands the required window via `_expand_date_range`
 - **Flexible**: stay length gates the match against any selected month. **Month** → listing must cover the entire month (`listing_start <= month_start` and `listing_end >= month_end`); **Week** → listing must offer a continuous `WEEK_STAY_DAYS` window inside the month. See `_listing_covers_month_stay` / `_listing_covers_week_stay`.
 
@@ -55,5 +60,5 @@ HTML selectors in `listing_scraper.py` drift when the site changes. Key regexes:
 ## Scope
 
 - Extend filters and results UX in `app.py`; keep parsing logic in `listing_scraper.py`
-- Detail pages are fetched for **photo galleries on the current results page** when that page renders (`fetch_listing_photo_urls` / `_prefetch_page_galleries`) — do not crawl detail pages during the index refresh
+- Detail pages are fetched for **photo galleries on the current results page** in the background after cards render (`fetch_listing_photo_urls` / `_prefetch_page_galleries`) — do not crawl detail pages during the index refresh
 - Minimize scope; match existing code style

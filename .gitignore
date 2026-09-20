@@ -7,3 +7,5 @@
 __pycache__/
 *.pyc
 .DS_Store
+.listings_cache_v2_*.json
+.listings_cache_v2_*.tmp
