@@ -1,5 +1,5 @@
 """
-ListingProject Advanced Search: cached regional listings with background refresh.
+ListingProject Explorer: cached regional listings with background refresh.
 
 Run: streamlit run app.py
 """
@@ -73,27 +73,6 @@ def _default_filters() -> dict[str, Any]:
         "flexible_months": [],
     }
 
-
-def _borough_widget_key(borough_key: BoroughKey) -> str:
-    return f"borough_{borough_key}"
-
-
-def _hood_widget_key(name: str) -> str:
-    return f"hood_{name}"
-
-
-def _property_type_widget_key(name: str) -> str:
-    return f"ptype_{name}"
-
-
-def _filter_dropdown_label(group_name: str, selected: list[str]) -> str:
-    if not selected:
-        return group_name
-    if len(selected) == 1:
-        return selected[0]
-    if len(selected) <= 2:
-        return ", ".join(selected)
-    return f"{group_name} ({len(selected)})"
 
 def _parse_date(value: str | None) -> date | None:
     if not value:
@@ -386,21 +365,9 @@ def _init_filters() -> None:
     st.session_state._apply_filters_to_widgets = True
 
 
-def _sync_widget_keys_from_filters(
-    filters: dict[str, Any],
-    hood_options: list[str],
-    property_type_options: list[str],
-) -> None:
-    st.session_state["region_keys"] = list(filters.get("region_keys", []))
-    selected_boroughs = set(filters["borough_keys"])
-    selected_hoods = set(filters["neighborhoods"])
-    selected_property_types = set(filters.get("property_types", []))
-    for _, borough_key in BOROUGH_LABELS:
-        st.session_state[_borough_widget_key(borough_key)] = (
-            borough_key in selected_boroughs
-        )
-    for hood in hood_options:
-        st.session_state[_hood_widget_key(hood)] = hood in selected_hoods
+def _sync_widget_keys_from_filters(filters: dict[str, Any]) -> None:
+    for key in ("region_keys", "borough_keys", "neighborhoods", "property_types"):
+        st.session_state[key] = list(filters.get(key, []))
     st.session_state["date_mode"] = filters["date_mode"]
     st.session_state["dates_start"] = (
         _parse_date(filters["dates_start"]) or DEFAULT_DATES_START
@@ -413,31 +380,13 @@ def _sync_widget_keys_from_filters(
     st.session_state["flexible_months"] = list(filters["flexible_months"])
     st.session_state["first_access_only"] = bool(filters.get("first_access_only", False))
     st.session_state["new_only"] = bool(filters.get("new_only", False))
-    for ptype in property_type_options:
-        st.session_state[_property_type_widget_key(ptype)] = (
-            ptype in selected_property_types
-        )
 
 
-def _collect_filters_from_widgets(
-    hood_options: list[str], property_type_options: list[str]
-) -> dict[str, Any]:
-    borough_keys = [
-        borough_key
-        for _, borough_key in BOROUGH_LABELS
-        if st.session_state.get(_borough_widget_key(borough_key), False)
-    ]
-    neighborhoods = [
-        hood
-        for hood in hood_options
-        if st.session_state.get(_hood_widget_key(hood), False)
-    ]
+def _collect_filters_from_widgets() -> dict[str, Any]:
+    borough_keys = list(st.session_state.get("borough_keys", []))
+    neighborhoods = list(st.session_state.get("neighborhoods", []))
+    property_types = list(st.session_state.get("property_types", []))
     date_mode: DateFilterMode = st.session_state.get("date_mode", "none")
-    property_types = [
-        ptype
-        for ptype in property_type_options
-        if st.session_state.get(_property_type_widget_key(ptype), False)
-    ]
     filters: dict[str, Any] = {
         "region_keys": list(st.session_state.get("region_keys", [])),
         "borough_keys": borough_keys if st.session_state.get("region_keys") == [NYC_REGION] else [],
@@ -824,9 +773,7 @@ def _area_label(key: str, regions: dict) -> str:
 
 
 def _areas_changed():
-    for key in list(st.session_state):
-        if key.startswith("hood_") and "::" in key:
-            st.session_state[key] = False
+    st.session_state["neighborhoods"] = []
     st.session_state.filters["neighborhoods"] = []
 
 
@@ -834,9 +781,30 @@ def _region_changed():
     regions = st.session_state.get("region_keys", [])
     _areas_changed()
     if regions != [NYC_REGION]:
-        for _, borough in BOROUGH_LABELS:
-            st.session_state[_borough_widget_key(borough)] = False
+        st.session_state["borough_keys"] = []
+        st.session_state.filters["borough_keys"] = []
     st.session_state.filters["region_keys"] = list(regions)
+
+
+def _refresh_error_message(source: str, message: str, regions: dict) -> str:
+    if source == "first" and message == "No first-access regions available; check membership/session":
+        return (
+            "First-access listings could not be checked: Listings Project returned no "
+            "first-access regions. Your saved sign-in may have expired, or your membership "
+            "may not include first access. Check your membership and reconnect your "
+            "Listings Project session, then select Refresh listings. "
+            "Public listings can still update; any saved first-access results remain visible."
+        )
+    if ":" in source:
+        kind, key = source.split(":", 1)
+        label = regions[key].label if key in regions else key.replace("-", " ").title()
+        scope = f"{label} ({'first access' if kind == 'first' else 'public listings'})"
+        message = message.removeprefix(f"{label}: ")
+    else:
+        scope = {"first": "First-access region lookup", "public": "Public region lookup"}.get(source, "Listings refresh")
+    return (f"{scope} could not be refreshed. Reason: {message}. "
+            "Saved results for this source remain visible, but may be out of date. "
+            "Select Refresh listings to try again.")
 
 
 def _show_refresh_status(snapshot: dict):
@@ -848,11 +816,8 @@ def _show_refresh_status(snapshot: dict):
     elif snapshot["updated_at"]:
         updated = datetime.fromtimestamp(snapshot["updated_at"]).strftime("%b %d, %I:%M %p")
         st.caption(f"Cached results · last updated {updated}")
-    if snapshot["errors"]:
-        st.warning("Some listings could not be refreshed. Previous results remain available.")
-        with st.expander("Refresh details"):
-            for message in snapshot["errors"].values():
-                st.write(message)
+    for source, message in snapshot["errors"].items():
+        st.warning(_refresh_error_message(source, message, snapshot["regions"]))
 
 
 @st.fragment(run_every=1)
@@ -1239,9 +1204,9 @@ def render_listing_card(row: ListingRow, *, is_new: bool) -> None:
         )
 
 
-st.set_page_config(page_title="ListingProject Advanced Search", layout="wide")
+st.set_page_config(page_title="ListingProject Explorer", layout="wide")
 inject_theme()
-st.title("ListingProject Advanced Search")
+st.title("ListingProject Explorer")
 st.caption("Find your next place across every Listings Project region.")
 _init_filters()
 auth_cookie = _load_auth_cookie()
@@ -1252,10 +1217,7 @@ if st.session_state.get("_access_key") != context_key:
     st.session_state._access_key = context_key
 
 store = _listings_store(auth_cookie)
-if st.sidebar.button("Refresh listings"):
-    store.start(force=True)
-else:
-    store.start()
+store.start()
 snapshot = store.snapshot()
 st.session_state._store_revision = snapshot["revision"]
 all_rows = snapshot["rows"]
@@ -1279,15 +1241,17 @@ else:
     st.session_state._known_urls = current_urls
 st.session_state._new_urls = current_urls - st.session_state._seen_baseline
 refresh_completed = snapshot["cycle"] != st.session_state._store_cycle
-_refresh_monitor(store)
 
 filters = st.session_state.filters
 property_type_options = sorted(set(build_property_type_options(all_rows)) | set(filters["property_types"]))
-initial_areas = sorted(set().union(*(_area_keys(row) for row in all_rows)) | set(filters["neighborhoods"]))
 if st.session_state.pop("_apply_filters_to_widgets", False):
-    _sync_widget_keys_from_filters(filters, initial_areas, property_type_options)
+    _sync_widget_keys_from_filters(filters)
 
-with st.sidebar:
+# Also hydrate list widgets when an already-open session reloads this UI update.
+for key in ("borough_keys", "neighborhoods", "property_types"):
+    st.session_state.setdefault(key, list(filters[key]))
+
+with st.sidebar, st.container(key="sidebar_filters"):
     st.header("Filters")
     region_options = sorted(set(regions) | set(st.session_state.get("region_keys", [])),
                             key=lambda key: regions[key].label if key in regions else key)
@@ -1300,13 +1264,12 @@ with st.sidebar:
     st.checkbox("New only", key="new_only")
     selected_borough_keys = set()
     if selected_regions == [NYC_REGION]:
-        selected_borough_labels = [label for label, key in BOROUGH_LABELS
-                                   if st.session_state.get(_borough_widget_key(key), False)]
-        with st.popover(_filter_dropdown_label("Borough", selected_borough_labels), use_container_width=True):
-            for label, key in BOROUGH_LABELS:
-                st.checkbox(label, key=_borough_widget_key(key), on_change=_areas_changed)
-        selected_borough_keys = {key for _, key in BOROUGH_LABELS
-                                 if st.session_state.get(_borough_widget_key(key), False)}
+        borough_labels = {key: label for label, key in BOROUGH_LABELS}
+        selected_borough_keys = set(st.multiselect(
+            "Borough", list(borough_labels), key="borough_keys",
+            placeholder="All boroughs", format_func=borough_labels.get,
+            on_change=_areas_changed,
+        ))
     region_rows = [row for row in all_rows
                    if (not selected_regions or set(selected_regions).intersection(row.region_keys or (row.region_key,)))
                    and (not selected_borough_keys or row.borough_key in selected_borough_keys)]
@@ -1316,59 +1279,15 @@ with st.sidebar:
         key for key in filters["neighborhoods"]
         if (not selected_regions or key.split("::", 1)[0] in selected_regions)
     })
-    for key in hood_options:
-        if _hood_widget_key(key) not in st.session_state:
-            st.session_state[_hood_widget_key(key)] = key in filters["neighborhoods"]
-
-    selected_hood_labels = [
-        hood
-        for hood in hood_options
-        if st.session_state.get(_hood_widget_key(hood), False)
-    ]
-    with st.popover(
-        _filter_dropdown_label("Neighborhood / Area", [_area_label(key, regions) for key in selected_hood_labels]),
-        use_container_width=True,
-    ):
-        hood_col1, hood_col2 = st.columns(2)
-        with hood_col1:
-            if st.button("Select all", key="hood_select_all"):
-                for hood in hood_options:
-                    st.session_state[_hood_widget_key(hood)] = True
-                st.rerun()
-        with hood_col2:
-            if st.button("Clear", key="hood_clear"):
-                for hood in hood_options:
-                    st.session_state[_hood_widget_key(hood)] = False
-                st.rerun()
-
-        with st.container(height=300):
-            for hood in hood_options:
-                st.checkbox(_area_label(hood, regions), key=_hood_widget_key(hood))
-
-    selected_property_type_labels = [
-        ptype
-        for ptype in property_type_options
-        if st.session_state.get(_property_type_widget_key(ptype), False)
-    ]
-    with st.popover(
-        _filter_dropdown_label("Property type", selected_property_type_labels),
-        use_container_width=True,
-    ):
-        ptype_col1, ptype_col2 = st.columns(2)
-        with ptype_col1:
-            if st.button("Select all", key="ptype_select_all"):
-                for ptype in property_type_options:
-                    st.session_state[_property_type_widget_key(ptype)] = True
-                st.rerun()
-        with ptype_col2:
-            if st.button("Clear", key="ptype_clear"):
-                for ptype in property_type_options:
-                    st.session_state[_property_type_widget_key(ptype)] = False
-                st.rerun()
-
-        with st.container(height=300):
-            for ptype in property_type_options:
-                st.checkbox(ptype, key=_property_type_widget_key(ptype))
+    selected_neighborhoods = set(st.multiselect(
+        "Neighborhood / Area", hood_options, key="neighborhoods",
+        placeholder="All neighborhoods / areas",
+        format_func=lambda key: _area_label(key, regions),
+    ))
+    selected_property_types = set(st.multiselect(
+        "Property type", property_type_options, key="property_types",
+        placeholder="All property types",
+    ))
 
     st.subheader("Date availability")
     date_mode: DateFilterMode = st.radio(
@@ -1436,9 +1355,7 @@ with st.sidebar:
         if not flexible_months:
             st.caption("Select one or more months to filter by availability.")
 
-    st.session_state.filters = _collect_filters_from_widgets(
-        hood_options, property_type_options
-    )
+    st.session_state.filters = _collect_filters_from_widgets()
     _save_persisted_filters(st.session_state.filters)
 
     if st.button("Clear filters", use_container_width=True):
@@ -1448,21 +1365,11 @@ with st.sidebar:
         st.session_state._apply_filters_to_widgets = True
         st.rerun()
 
-selected_borough_keys = {
-    borough_key
-    for _, borough_key in BOROUGH_LABELS
-    if selected_regions == [NYC_REGION] and st.session_state.get(_borough_widget_key(borough_key), False)
-}
-selected_neighborhoods = {
-    hood
-    for hood in hood_options
-    if st.session_state.get(_hood_widget_key(hood), False)
-}
-selected_property_types = {
-    ptype
-    for ptype in property_type_options
-    if st.session_state.get(_property_type_widget_key(ptype), False)
-}
+    _refresh_monitor(store)
+
+with st.sidebar, st.container(key="sidebar_footer"):
+    st.button("Refresh listings", key="refresh_listings", use_container_width=True,
+              on_click=store.start, kwargs={"force": True})
 
 filtered = filter_rows(
     all_rows,
@@ -1571,7 +1478,7 @@ else:
     st.download_button(
         "Download CSV",
         data=buf.getvalue(),
-        file_name="listingproject_advanced_search.csv",
+        file_name="listingproject_explorer.csv",
         mime="text/csv",
     )
 

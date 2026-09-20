@@ -686,7 +686,7 @@ def fetch_listing_photo_urls(
     cookie: str | None = None,
 ) -> tuple[str, ...]:
     """GET a listing detail page and return gallery photo URLs (may be empty)."""
-    headers: dict[str, str] = {"User-Agent": "ListingProjectLocalTool/1.0"}
+    headers: dict[str, str] = {"User-Agent": "ListingProjectExplorer/2.0"}
     if cookie:
         headers["Cookie"] = cookie
     with httpx.Client(
@@ -1011,7 +1011,7 @@ def fetch_all_listings(
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=30, headers={
-            "User-Agent": "ListingProjectAdvancedSearch/2.0",
+            "User-Agent": "ListingProjectExplorer/2.0",
             **({"Cookie": cookie} if cookie else {}),
         })
     try:

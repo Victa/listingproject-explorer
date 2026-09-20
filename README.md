@@ -1,4 +1,4 @@
-# ListingProject Advanced Search
+# ListingProject Explorer
 
 Personal Streamlit app for searching every available real-estate region on [listingsproject.com](https://www.listingsproject.com).
 
@@ -19,7 +19,7 @@ Note: the demo runs with public access only. If you have a listingsproject.com m
 - **New listings** — highlights listings you haven't seen yet across refreshes
 - **First access** — optional (requires a session cookie; see below)
 - **CSV export** of the filtered results
-- **macOS launcher** — double-click `ListingProject Advanced Search.app` to start Streamlit and open the browser
+- **macOS launcher** — double-click `ListingProject Explorer.app` to start Streamlit and open the browser
 
 ## Requirements
 
@@ -29,8 +29,8 @@ Note: the demo runs with public access only. If you have a listingsproject.com m
 ## Setup
 
 ```bash
-git clone <repo-url>
-cd ListingProject
+git clone https://github.com/Victa/listingproject-explorer.git
+cd listingproject-explorer
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -62,7 +62,7 @@ Copy the cookie header from a logged-in browser session on listingsproject.com. 
 
 ## macOS launcher
 
-Double-click `ListingProject Advanced Search.app` to activate the project venv, start Streamlit on port 8501, and open the browser. Requires a local `.venv` already set up (see Setup above).
+Double-click `ListingProject Explorer.app` to activate the project venv, start Streamlit on port 8501, and open the browser. Requires a local `.venv` already set up (see Setup above).
 
 To regenerate the app icon from a square PNG:
 

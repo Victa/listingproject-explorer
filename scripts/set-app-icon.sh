@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build AppIcon.icns from a square PNG and install it in ListingProject Advanced Search.app
+# Build AppIcon.icns from a square PNG and install it in ListingProject Explorer.app
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/ListingProject Advanced Search.app"
+APP="$ROOT/ListingProject Explorer.app"
 RESOURCES="$APP/Contents/Resources"
 BUILD="$ROOT/.build"
 ICONSET="$BUILD/AppIcon.iconset"
@@ -49,4 +49,4 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$PLIST"
 
 touch "$APP"
-echo "Installed AppIcon.icns in ListingProject Advanced Search.app"
+echo "Installed AppIcon.icns in ListingProject Explorer.app"

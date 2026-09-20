@@ -145,7 +145,7 @@ class ListingsStore:
 
     def _client(self):
         return httpx.Client(timeout=30, headers={
-            "User-Agent": "ListingProjectAdvancedSearch/2.0",
+            "User-Agent": "ListingProjectExplorer/2.0",
             **({"Cookie": self.cookie} if self.cookie else {}),
         })
 

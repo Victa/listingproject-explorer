@@ -92,6 +92,48 @@ section[data-testid="stSidebar"] h3 {
   letter-spacing: -0.015em;
 }
 
+/* Keep the refresh action in view while the filters and status scroll. */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+  flex-shrink: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {
+  height: 100%;
+  min-height: 0;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has(.st-key-sidebar_filters) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"]:has(.st-key-sidebar_footer) {
+  flex: 0 0 auto;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_filters {
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 1rem;
+}
+section[data-testid="stSidebar"] .st-key-sidebar_footer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--lp-border);
+  background: var(--lp-surface);
+  padding: 1rem 0 max(1rem, env(safe-area-inset-bottom));
+}
+
 /* —— Results grid: continuous CSS grid (1 / 2 / 3 by breakpoint) —— */
 div[class*="st-key-listings_grid"] {
   display: grid !important;

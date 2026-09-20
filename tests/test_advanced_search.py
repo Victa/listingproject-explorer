@@ -245,10 +245,15 @@ class StoreTests(unittest.TestCase):
 
 class FakeStore:
     def __init__(self):
-        self.state=dict(rows=[listing(), listing(NYC,url='https://example.com/nyc',area='Greenpoint')],
+        nyc_listing = replace(listing(NYC,url='https://example.com/nyc',area='Greenpoint'),
+                              borough_label='Brooklyn', borough_key='brooklyn')
+        self.state=dict(rows=[listing(), nyc_listing],
                         regions={'paris':PARIS,NYC_REGION:NYC}, errors={}, refreshing=True,
                         completed=1,total=2,revision=1,cycle=0,updated_at=1,last_complete=0)
-    def start(self,force=False): return False
+        self.starts=[]
+    def start(self,force=False):
+        self.starts.append(force)
+        return False
     def snapshot(self): return dict(self.state)
 
 
@@ -262,7 +267,7 @@ class PageTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         source=(ROOT/'app.py').read_text()
         source=source.replace('Path(__file__).parent',f'Path({self.temp.name!r})')
-        source=source.replace('store = _listings_store(auth_cookie)',"store = __import__('test_advanced_search').UI_STORE")
+        source=source.replace('store = _listings_store(auth_cookie)',f"store = __import__({__name__!r}, fromlist=['UI_STORE']).UI_STORE")
         source=source.replace('_prefetch_page_galleries(page_rows, auth_cookie)','pass # no network in UI tests')
         self.app=AppTest.from_string(source,default_timeout=10)
 
@@ -271,14 +276,50 @@ class PageTests(unittest.TestCase):
     def test_cached_page_renders_during_refresh_and_region_filter_works(self):
         app=self.app.run()
         self.assertEqual(list(app.exception),[])
-        self.assertEqual(app.title[0].value,'ListingProject Advanced Search')
+        self.assertEqual(app.title[0].value,'ListingProject Explorer')
         self.assertIn('2 listings',app.main.subheader[-1].value)
         app.multiselect(key='region_keys').set_value(['paris']).run()
         self.assertEqual(list(app.exception),[])
         self.assertIn('1 listing',app.main.subheader[-1].value)
-        self.assertFalse(any(c.label=='Brooklyn' for c in app.checkbox))
+        self.assertRaises(KeyError, lambda: app.multiselect(key='borough_keys'))
         app.multiselect(key='region_keys').set_value([NYC_REGION]).run()
-        self.assertTrue(any(c.label=='Brooklyn' for c in app.checkbox))
+        self.assertIn('Brooklyn', app.multiselect(key='borough_keys').options)
+        app.multiselect(key='borough_keys').set_value(['brooklyn']).run()
+        self.assertEqual(list(app.exception),[])
+        self.assertIn('1 listing',app.main.subheader[-1].value)
+
+    def test_multiselect_dependencies_restore_and_clear(self):
+        UI_STORE.state['rows']=[
+            replace(listing(NYC,url='https://example.com/nyc',area='Greenpoint'),
+                    borough_label='Brooklyn', borough_key='brooklyn',
+                    listing_type='Apartments for Rent'),
+            replace(listing(url='https://example.com/paris-rent'), listing_type='Apartments for Rent'),
+            replace(listing(url='https://example.com/paris-sale'), listing_type='Apartments for Sale'),
+        ]
+        app=self.app.run()
+        app.multiselect(key='region_keys').set_value([NYC_REGION]).run()
+        app.multiselect(key='borough_keys').set_value(['brooklyn']).run()
+        app.multiselect(key='neighborhoods').set_value([NYC_REGION+'::Greenpoint']).run()
+        app.multiselect(key='property_types').set_value(['Apartments for Rent']).run()
+        self.assertIn('1 listing',app.main.subheader[-1].value)
+
+        saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
+        self.assertEqual(saved['region_keys'],[NYC_REGION])
+        self.assertEqual(saved['borough_keys'],['brooklyn'])
+        self.assertEqual(saved['neighborhoods'],[NYC_REGION+'::Greenpoint'])
+        self.assertEqual(saved['property_types'],['Apartments for Rent'])
+
+        app.multiselect(key='region_keys').set_value(['paris']).run()
+        self.assertRaises(KeyError, lambda: app.multiselect(key='borough_keys'))
+        self.assertEqual(app.multiselect(key='neighborhoods').value,[])
+        saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
+        self.assertEqual(saved['borough_keys'],[])
+        self.assertEqual(saved['neighborhoods'],[])
+
+        app.button[0].click().run()
+        self.assertEqual(app.multiselect(key='region_keys').value,[])
+        self.assertEqual(app.multiselect(key='neighborhoods').value,[])
+        self.assertEqual(app.multiselect(key='property_types').value,[])
 
     def test_background_addition_toast_once_preserves_filter(self):
         app=self.app.run()
@@ -314,6 +355,30 @@ class PageTests(unittest.TestCase):
         self.assertEqual(app.session_state['results_page'],2)
         self.assertGreater(app.session_state['_listing_order']['https://example.com/new'],
                            app.session_state['_listing_order']['https://example.com/19'])
+
+    def test_refresh_button_forces_refresh_without_resetting_search(self):
+        UI_STORE.state['rows']=[listing(url=f'https://example.com/{i}') for i in range(20)]
+        app=self.app.run()
+        app.multiselect(key='region_keys').set_value(['paris']).run()
+        app.session_state['results_page']=2
+        app.run()
+        app.button(key='refresh_listings').click().run()
+        self.assertIn(True, UI_STORE.starts)
+        self.assertEqual(app.multiselect(key='region_keys').value,['paris'])
+        self.assertEqual(app.session_state['results_page'],2)
+
+    def test_refresh_status_and_errors_are_visible_in_sidebar(self):
+        UI_STORE.state.update(refreshing=False,errors={
+            'first':'No first-access regions available; check membership/session',
+            'public:paris':'Paris: Temporarily unavailable',
+        })
+        app=self.app.run()
+        self.assertEqual(list(app.exception),[])
+        self.assertEqual(len(app.expander),0)
+        self.assertTrue(any('Cached results' in c.value for c in app.sidebar.caption))
+        warnings=[w.value for w in app.sidebar.warning]
+        self.assertTrue(any('First-access listings could not be checked' in warning for warning in warnings))
+        self.assertTrue(any('Paris (public listings) could not be refreshed' in warning for warning in warnings))
 
     def test_only_visible_results_are_marked_seen(self):
         UI_STORE.state['rows']=[listing(url=f'https://example.com/{i}') for i in range(20)]

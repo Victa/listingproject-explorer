@@ -9,7 +9,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.listingsproject.app</string>
 	<key>CFBundleName</key>
-	<string>ListingProject Advanced Search</string>
+	<string>ListingProject Explorer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
