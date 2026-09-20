@@ -12,8 +12,8 @@ Note: the demo runs with public access only. If you have a listingsproject.com m
 
 ## Features
 
-- **Region filter** — searchable multi-select, with all regions selected by default. Newly offered regions are discovered automatically.
-- **Location filters** — areas are scoped to their regions; NYC searches also offer boroughs and canonicalized neighborhoods (e.g. "Bed Stuy" → "Bedford-Stuyvesant"). Long selected labels wrap without truncation.
+- **Region filter** — searchable checkbox dropdown, with all regions included by default. Selected options stay in the list with a checkmark and can be unchecked in place. Newly offered regions are discovered automatically.
+- **Location filters** — areas are scoped to their regions; NYC searches also offer boroughs and canonicalized neighborhoods (e.g. "Bed Stuy" → "Bedford-Stuyvesant"). Long selected labels wrap without truncation. Region, borough, neighborhood, space-type, and flexible-month menus retain checked options in their searchable lists.
 - **Listings, space type, and arrangement filters** — browse All posts (the default), Available spaces, or Wanted posts. Select space types independently of Rent, Buy, Sublet, Share, Swap, or House sitting. No arrangement boxes checked means all arrangements. Apartment + House with Rent + Sublet includes all four combinations.
 - **Source-aware categories** — unspecified arrangements remain Unspecified; unknown categories stay visible under All posts and Other / unspecified without guessing from titles. Arrangement options adapt to location, post kind, and space selections; selected options stay removable even with no matches.
 - **Background refresh** — keep browsing while regional snapshots update, with subtle new-card highlights and a toast when new results match your filters. Gallery photos load separately.

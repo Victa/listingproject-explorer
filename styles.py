@@ -570,6 +570,45 @@ div[data-testid="stCheckbox"] label {
   height: auto !important;
   overflow-wrap: anywhere;
 }
+/* Checkbox menus keep the summary and long option names readable. */
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] {
+  background: var(--lp-surface-secondary, #f5f5f7);
+  border: 1px solid var(--lp-border);
+  border-radius: var(--lp-radius-control);
+  text-align: left;
+  justify-content: space-between;
+  height: auto;
+  min-height: 40px;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div {
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:first-child {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-start;
+  text-align: left;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:first-child > span {
+  width: 100%;
+  justify-content: flex-start !important;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] [data-testid="stMarkdownContainer"],
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] p {
+  width: 100%;
+  text-align: left !important;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] > div > div:last-child {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+[class*="st-key-checked_select_"] [data-testid="stPopoverButton"] p,
+[data-testid="stPopoverBody"] [data-testid="stCheckbox"] p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 /* Multiselect tags as pills */
 span[data-baseweb="tag"] {
   border-radius: var(--lp-radius-pill) !important;

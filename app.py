@@ -28,6 +28,7 @@ from listing_scraper import (
     fetch_listing_photo_urls,
 )
 from listing_categories import (SPACE_TYPES, ARRANGEMENTS, POST_KINDS, classify_category, migrate_category_filters)
+from checked_select import checked_select
 from styles import inject_theme
 from listings_store import ListingsStore, access_key
 
@@ -1280,7 +1281,7 @@ with st.sidebar, st.container(key="sidebar_filters"):
     st.toggle("New only", key="new_only", width="stretch")
     region_options = sorted(set(regions) | set(st.session_state.get("region_keys", [])),
                             key=lambda key: regions[key].label if key in regions else key)
-    selected_regions = st.multiselect(
+    selected_regions = checked_select(
         "Region", region_options, key="region_keys", placeholder="All regions",
         format_func=lambda key: regions[key].label if key in regions else key.replace("-", " ").title(),
         on_change=_region_changed,
@@ -1288,7 +1289,7 @@ with st.sidebar, st.container(key="sidebar_filters"):
     selected_borough_keys = set()
     if selected_regions == [NYC_REGION]:
         borough_labels = {key: label for label, key in BOROUGH_LABELS}
-        selected_borough_keys = set(st.multiselect(
+        selected_borough_keys = set(checked_select(
             "Borough", list(borough_labels), key="borough_keys",
             placeholder="All boroughs", format_func=borough_labels.get,
             on_change=_areas_changed,
@@ -1302,7 +1303,7 @@ with st.sidebar, st.container(key="sidebar_filters"):
         key for key in filters["neighborhoods"]
         if (not selected_regions or key.split("::", 1)[0] in selected_regions)
     })
-    selected_neighborhoods = set(st.multiselect(
+    selected_neighborhoods = set(checked_select(
         "Neighborhood / Area", hood_options, key="neighborhoods",
         placeholder="All neighborhoods / areas",
         format_func=lambda key: _area_label(key, regions),
@@ -1313,7 +1314,7 @@ with st.sidebar, st.container(key="sidebar_filters"):
                 "Rent + Sublet also includes houses for sublet.")
     selected_post_kind = st.selectbox("Listings", list(POST_KINDS), key="post_kind",
                                        format_func=POST_KINDS.get)
-    selected_space_types = set(st.multiselect(
+    selected_space_types = set(checked_select(
         "Space type", list(SPACE_TYPES), key="space_types", format_func=SPACE_TYPES.get,
         placeholder="All space types",
     ))
@@ -1390,7 +1391,7 @@ with st.sidebar, st.container(key="sidebar_filters"):
         )
         month_options = _flexible_month_options()
         month_labels = {key: label for label, key in month_options}
-        flexible_months = st.multiselect(
+        flexible_months = checked_select(
             "Go anytime",
             options=[key for _, key in month_options],
             format_func=lambda key: month_labels.get(key, key),

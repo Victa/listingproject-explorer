@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import httpx
 from streamlit.testing.v1 import AppTest
+from checked_select import option_key
 
 from listing_scraper import (
     NYC_REGION, REGIONS_URL, Region, ListingRow, discover_regions,
@@ -280,6 +281,17 @@ class FakeStore:
 UI_STORE=FakeStore()
 
 
+def select_options(app, key, values):
+    desired = set(values)
+    # Toggle visible options through Streamlit events; callbacks update canonical state.
+    for checkbox in list(app.checkbox):
+        if checkbox.key.startswith(f'{key}_option_'):
+            checked = checkbox.key in {option_key(key, value) for value in desired}
+            if checkbox.value != checked:
+                app.checkbox(key=checkbox.key).set_value(checked).run()
+    return app
+
+
 class PageTests(unittest.TestCase):
     def setUp(self):
         global UI_STORE
@@ -303,10 +315,10 @@ class PageTests(unittest.TestCase):
         self.assertIn('1 listing', app.main.subheader[-1].value)
         app.selectbox(key='post_kind').set_value('available').run()
         self.assertIn('2 listings', app.main.subheader[-1].value)
-        app.multiselect(key='space_types').set_value(['art_studio']).run()
-        self.assertEqual([c.label for c in app.checkbox], ['Share'])
+        select_options(app, 'space_types', ['art_studio'])
+        self.assertEqual([c.label for c in app.checkbox if c.key.startswith('arrangement_')], ['Share'])
         app.checkbox(key='arrangement_share').check().run()
-        app.multiselect(key='space_types').set_value(['apartment']).run()
+        select_options(app, 'space_types', ['apartment'])
         self.assertTrue(app.checkbox(key='arrangement_share').value)
         self.assertIn('0 listings', app.main.subheader[-1].value)
         UI_STORE.state['rows'] = []
@@ -315,9 +327,9 @@ class PageTests(unittest.TestCase):
         self.assertTrue(app.checkbox(key='arrangement_share').value)
         saved = json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
         self.assertEqual(saved['arrangements'], ['share'])
-        app.button[0].click().run()
+        next(b for b in app.button if b.label == 'Clear filters').click().run()
         self.assertEqual(app.selectbox(key='post_kind').value, 'all')
-        self.assertEqual(app.multiselect(key='space_types').value, [])
+        self.assertEqual(app.session_state['space_types'], [])
         self.assertFalse(any(c.value for c in app.checkbox))
 
     def test_category_change_resets_pagination(self):
@@ -329,7 +341,7 @@ class PageTests(unittest.TestCase):
             app.run()
             self.assertEqual(app.session_state['results_page'], 2)
             if action == 'space':
-                app.multiselect(key='space_types').set_value(['apartment', 'house']).run()
+                select_options(app, 'space_types', ['apartment', 'house'])
             elif action == 'arrangement':
                 app.checkbox(key='arrangement_rent').check().run()
             else:
@@ -345,7 +357,7 @@ class PageTests(unittest.TestCase):
         self.assertFalse(any('saved categories' in i.value for i in app.info))
         app.session_state['_filters_initialized'] = False
         app.run()
-        self.assertEqual(app.multiselect(key='space_types').value, ['apartment', 'house'])
+        self.assertEqual(app.session_state['space_types'], ['apartment', 'house'])
         self.assertTrue(app.checkbox(key='arrangement_rent').value)
         self.assertTrue(app.checkbox(key='arrangement_sublet').value)
         self.assertFalse(any('saved categories' in i.value for i in app.info))
@@ -355,13 +367,13 @@ class PageTests(unittest.TestCase):
         self.assertEqual(list(app.exception),[])
         self.assertEqual(app.title[0].value,'ListingProject Explorer')
         self.assertIn('2 listings',app.main.subheader[-1].value)
-        app.multiselect(key='region_keys').set_value(['paris']).run()
+        select_options(app, 'region_keys', ['paris'])
         self.assertEqual(list(app.exception),[])
         self.assertIn('1 listing',app.main.subheader[-1].value)
-        self.assertRaises(KeyError, lambda: app.multiselect(key='borough_keys'))
-        app.multiselect(key='region_keys').set_value([NYC_REGION]).run()
-        self.assertIn('Brooklyn', app.multiselect(key='borough_keys').options)
-        app.multiselect(key='borough_keys').set_value(['brooklyn']).run()
+        self.assertFalse(any(c.key.startswith('borough_keys_option_') for c in app.checkbox))
+        select_options(app, 'region_keys', [NYC_REGION])
+        self.assertIn('Brooklyn', [c.label for c in app.checkbox if c.key.startswith('borough_keys_option_')])
+        select_options(app, 'borough_keys', ['brooklyn'])
         self.assertEqual(list(app.exception),[])
         self.assertIn('1 listing',app.main.subheader[-1].value)
 
@@ -374,10 +386,10 @@ class PageTests(unittest.TestCase):
             replace(listing(url='https://example.com/paris-sale'), listing_type='Apartments for Sale'),
         ]
         app=self.app.run()
-        app.multiselect(key='region_keys').set_value([NYC_REGION]).run()
-        app.multiselect(key='borough_keys').set_value(['brooklyn']).run()
-        app.multiselect(key='neighborhoods').set_value([NYC_REGION+'::Greenpoint']).run()
-        app.multiselect(key='space_types').set_value(['apartment']).run()
+        select_options(app, 'region_keys', [NYC_REGION])
+        select_options(app, 'borough_keys', ['brooklyn'])
+        select_options(app, 'neighborhoods', [NYC_REGION+'::Greenpoint'])
+        select_options(app, 'space_types', ['apartment'])
         app.checkbox(key='arrangement_rent').check().run()
         self.assertIn('1 listing',app.main.subheader[-1].value)
 
@@ -388,17 +400,17 @@ class PageTests(unittest.TestCase):
         self.assertEqual(saved['space_types'],['apartment'])
         self.assertEqual(saved['arrangements'],['rent'])
 
-        app.multiselect(key='region_keys').set_value(['paris']).run()
-        self.assertRaises(KeyError, lambda: app.multiselect(key='borough_keys'))
-        self.assertEqual(app.multiselect(key='neighborhoods').value,[])
+        select_options(app, 'region_keys', ['paris'])
+        self.assertFalse(any(c.key.startswith('borough_keys_option_') for c in app.checkbox))
+        self.assertEqual(app.session_state['neighborhoods'],[])
         saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
         self.assertEqual(saved['borough_keys'],[])
         self.assertEqual(saved['neighborhoods'],[])
 
-        app.button[0].click().run()
-        self.assertEqual(app.multiselect(key='region_keys').value,[])
-        self.assertEqual(app.multiselect(key='neighborhoods').value,[])
-        self.assertEqual(app.multiselect(key='space_types').value,[])
+        next(b for b in app.button if b.label == 'Clear filters').click().run()
+        self.assertEqual(app.session_state['region_keys'],[])
+        self.assertEqual(app.session_state['neighborhoods'],[])
+        self.assertEqual(app.session_state['space_types'],[])
 
     def test_boolean_toggles_filter_restore_and_clear(self):
         first_url='https://example.com/first-access'
@@ -429,18 +441,18 @@ class PageTests(unittest.TestCase):
         restored=self.app.run()
         self.assertTrue(restored.toggle(key='new_only').value)
 
-        restored.button[0].click().run()
+        next(b for b in restored.button if b.label == 'Clear filters').click().run()
         self.assertFalse(restored.toggle(key='first_access_only').value)
         self.assertFalse(restored.toggle(key='new_only').value)
 
     def test_background_addition_toast_once_preserves_filter(self):
         app=self.app.run()
-        app.multiselect(key='region_keys').set_value(['paris']).run()
+        select_options(app, 'region_keys', ['paris'])
         UI_STORE.state['rows'].append(listing(url='https://example.com/new'))
         UI_STORE.state.update(revision=2,cycle=1,refreshing=False)
         app.run()
         self.assertEqual(list(app.exception),[])
-        self.assertEqual(app.multiselect(key='region_keys').value,['paris'])
+        self.assertEqual(app.session_state['region_keys'],['paris'])
         self.assertEqual(len(app.toast),1)
         self.assertIn('1 new listing',app.toast[0].value)
         app.run()
@@ -452,7 +464,7 @@ class PageTests(unittest.TestCase):
             'borough_keys':['brooklyn'], 'neighborhoods':['Greenpoint']}))
         app=self.app.run()
         self.assertEqual(list(app.exception),[])
-        self.assertEqual(app.multiselect(key='region_keys').value,[NYC_REGION])
+        self.assertEqual(app.session_state['region_keys'],[NYC_REGION])
         saved=json.loads((Path(self.temp.name)/'.listings_filters.json').read_text())
         self.assertEqual(saved['neighborhoods'],[NYC_REGION+'::Greenpoint'])
 
@@ -471,12 +483,12 @@ class PageTests(unittest.TestCase):
     def test_refresh_button_forces_refresh_without_resetting_search(self):
         UI_STORE.state['rows']=[listing(url=f'https://example.com/{i}') for i in range(20)]
         app=self.app.run()
-        app.multiselect(key='region_keys').set_value(['paris']).run()
+        select_options(app, 'region_keys', ['paris'])
         app.session_state['results_page']=2
         app.run()
         app.button(key='refresh_listings').click().run()
         self.assertIn(True, UI_STORE.starts)
-        self.assertEqual(app.multiselect(key='region_keys').value,['paris'])
+        self.assertEqual(app.session_state['region_keys'],['paris'])
         self.assertEqual(app.session_state['results_page'],2)
 
     def test_refresh_status_is_in_sidebar_and_errors_are_in_main(self):
@@ -502,7 +514,7 @@ class PageTests(unittest.TestCase):
     def test_cold_start_can_select_region_before_data_arrives(self):
         UI_STORE.state['rows']=[]
         app=self.app.run()
-        app.multiselect(key='region_keys').set_value(['paris']).run()
+        select_options(app, 'region_keys', ['paris'])
         self.assertEqual(list(app.exception),[])
         UI_STORE.state['rows']=[listing()]
         UI_STORE.state.update(revision=2,cycle=1,refreshing=False)
